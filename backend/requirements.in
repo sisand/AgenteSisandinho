@@ -1,0 +1,52 @@
+# ===================================================================
+# Arquivo de Dependências Diretas do Projeto.
+# Edite este arquivo para adicionar, remover ou atualizar pacotes.
+# Depois, gere o requirements.txt com: pip-compile
+# ===================================================================
+
+# --- API e Servidor ---
+fastapi==0.110.1
+uvicorn==0.34.0
+pydantic==2.11.5
+pydantic-settings==2.9.1
+
+# --- Supabase e Conexões ---
+supabase==2.15.1
+psycopg2==2.9.10
+SQLAlchemy==1.4.54
+
+# --- LangChain e CORREÇÕES de conflitos ---
+# Aqui listamos langchain e também fixamos as versões de suas
+# dependências que estavam causando conflitos.
+langchain==0.0.267
+langchain-community==0.0.10
+langchain-core==0.1.19
+langsmith==0.0.83
+async-timeout==4.0.3   # Correção para langchain
+packaging==23.2        # Correção para langchain-core
+
+# --- AI e Processamento ---
+openai==1.81.0
+httpx==0.28.1
+tiktoken==0.5.2
+
+# --- Vetorizadores e Banco Vetorial ---
+weaviate-client==4.15.0
+numpy==1.26.4
+pandas==2.2.1
+
+# Correção para os avisos do gencode no weaviate-client
+# A versão deve ser >= 5.29.0 (para grpc-health) e < 6.0 (para evitar os avisos originais)
+# Pulamos a v5.29.0 pois ela foi "yanked" (continha bugs).
+# Usamos a 5.29.5 que é a última correção dessa série.
+protobuf==5.29.5
+
+# --- Utilitários ---
+requests==2.32.3
+python-dotenv==1.0.1
+
+# --- Machine Learning (Classificador) ---
+transformers==4.40.1
+torch==2.7.0
+datasets==2.19.0
+accelerate==0.29.3
