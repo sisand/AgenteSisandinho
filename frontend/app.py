@@ -22,6 +22,40 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
+# No seu arquivo principal do Streamlit
+
+st.set_page_config(...)
+
+# --- BLOCO DE LOGIN ---
+def check_password():
+    """Retorna True se a senha estiver correta ou se já estiver logado."""
+    def password_entered():
+        """Verifica se a senha digitada corresponde ao segredo."""
+        if st.session_state["password"] == st.secrets["APP_PASSWORD"]:
+            st.session_state["password_correct"] = True
+            del st.session_state["password"]  # Não manter a senha em memória
+        else:
+            st.session_state["password_correct"] = False
+
+    # Se já estiver logado, não faz nada
+    if st.session_state.get("password_correct", False):
+        return True
+
+    # Pede a senha
+    st.text_input(
+        "Digite a senha para acessar:", type="password", on_change=password_entered, key="password"
+    )
+    if "password_correct" in st.session_state and not st.session_state.password_correct:
+        st.error("😕 Senha incorreta.")
+    return False
+
+# Adicione uma senha no seu Secrets do Streamlit Cloud: APP_PASSWORD = "sua_senha_secreta"
+if not check_password():
+    st.stop()  # Para a execução do app se a senha não for correta
+
+# --- FIM DO BLOCO DE LOGIN ---
+
+
 # 🏠 CABEÇALHO SUPERIOR
 st.markdown(
     "<h1 style='text-align: center; color: #00A86B;'>🧠 Sisandinho - Assistente Virtual da Sisand</h1>",
