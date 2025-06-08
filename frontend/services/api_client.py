@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 # API URL base - configurável via variável de ambiente
 API_BASE_URL = os.environ.get("API_BASE_URL", "http://127.0.0.1:8000")
 # Timeout padrão para a maioria das chamadas
-API_TIMEOUT = 30 
+API_TIMEOUT = 180
 
 def api_call(endpoint: str, method: str = "GET", data: Optional[Dict] = None, timeout: int = API_TIMEOUT) -> Dict:
     """
