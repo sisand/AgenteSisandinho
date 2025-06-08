@@ -8,7 +8,7 @@ accelerate==0.29.3
     # via -r requirements.in
 aiohappyeyeballs==2.6.1
     # via aiohttp
-aiohttp==3.12.9
+aiohttp==3.12.11
     # via
     #   datasets
     #   fsspec
@@ -222,7 +222,7 @@ protobuf==5.29.5
     #   grpcio-tools
 psutil==7.0.0
     # via accelerate
-psycopg2==2.9.10
+psycopg2-binary==2.9.9
     # via -r requirements.in
 pyarrow==20.0.0
     # via datasets
