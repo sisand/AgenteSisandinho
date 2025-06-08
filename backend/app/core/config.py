@@ -20,6 +20,8 @@ class Settings(BaseSettings):
     MOVI_DETAIL_URL: str
     BASE_ARTICLE_URL: str
 
+    APP_PASSWORD: str
+    
     DEBUG: bool = False
     LOG_LEVEL: str = "INFO"
 
