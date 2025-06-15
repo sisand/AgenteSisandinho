@@ -10,10 +10,14 @@ attrs==25.3.0
     # via
     #   jsonschema
     #   referencing
+bcrypt==4.3.0
+    # via streamlit-authenticator
 blinker==1.9.0
     # via streamlit
 cachetools==5.5.2
     # via streamlit
+captcha==0.7.1
+    # via streamlit-authenticator
 certifi==2025.4.26
     # via requests
 charset-normalizer==3.4.2
@@ -22,6 +26,8 @@ click==8.2.1
     # via streamlit
 colorama==0.4.6
     # via click
+extra-streamlit-components==0.1.71
+    # via streamlit-authenticator
 gitdb==4.0.12
     # via gitpython
 gitpython==3.1.44
@@ -44,7 +50,7 @@ markupsafe==3.0.2
     # via jinja2
 mdurl==0.1.2
     # via markdown-it-py
-narwhals==1.41.1
+narwhals==1.42.0
     # via altair
 numpy==1.26.4
     # via
@@ -62,6 +68,7 @@ pandas==2.2.1
     #   streamlit
 pillow==10.4.0
     # via
+    #   captcha
     #   pytesseract
     #   streamlit
 protobuf==4.25.8
@@ -72,6 +79,8 @@ pydeck==0.9.1
     # via streamlit
 pygments==2.19.1
     # via rich
+pyjwt==2.10.1
+    # via streamlit-authenticator
 pytesseract==0.3.10
     # via -r requirements.in
 python-dateutil==2.9.0.post0
@@ -80,6 +89,8 @@ python-dateutil==2.9.0.post0
     #   streamlit
 pytz==2025.2
     # via pandas
+pyyaml==6.0.2
+    # via streamlit-authenticator
 referencing==0.36.2
     # via
     #   jsonschema
@@ -101,7 +112,11 @@ smmap==5.0.2
 streamlit==1.31.1
     # via
     #   -r requirements.in
+    #   extra-streamlit-components
+    #   streamlit-authenticator
     #   streamlit-autorefresh
+streamlit-authenticator==0.3.3
+    # via -r requirements.in
 streamlit-autorefresh==0.0.1
     # via -r requirements.in
 tenacity==8.5.0
@@ -128,5 +143,5 @@ validators==0.35.0
     # via streamlit
 watchdog==6.0.0
     # via streamlit
-zipp==3.22.0
+zipp==3.23.0
     # via importlib-metadata

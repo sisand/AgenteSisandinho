@@ -1,29 +1,25 @@
+from functools import lru_cache
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env")
+    """
+    Define e carrega as configurações da aplicação a partir de um arquivo .env.
+    """
+    model_config = SettingsConfigDict(env_file="backend/.env", extra='ignore')
 
-    ENVIRONMENT: str
+    # Segredos e Conexões
     SUPABASE_URL: str
     SUPABASE_KEY: str
-
     OPENAI_API_KEY: str
-    DEFAULT_MODEL: str = "gpt-3.5-turbo"
-    EMBEDDING_MODEL: str = "text-embedding-ada-002"
-
-    WEAVIATE_URL: str
-    WEAVIATE_API_KEY: str = None
-
+    WEAVIATE_API_KEY: str
     MOVI_TOKEN: str
-    MOVI_LIST_URL: str
-    MOVI_DETAIL_URL: str
-    BASE_ARTICLE_URL: str
+    HUGGING_FACE_HUB_TOKEN: str
+    ALLOWED_API_KEYS: str
 
-    APP_PASSWORD: str
-    
-    DEBUG: bool = False
-    LOG_LEVEL: str = "INFO"
-
-
-settings = Settings()
+@lru_cache
+def get_settings() -> Settings:
+    """
+    Retorna a instância única das configurações.
+    O cache garante que o objeto Settings seja criado apenas uma vez.
+    """
+    return Settings()

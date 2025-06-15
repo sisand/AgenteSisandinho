@@ -6,7 +6,7 @@ Coleta e analisa métricas de uso e desempenho do sistema.
 from typing import Dict, Any, List
 import datetime
 from app.utils.logger import get_logger
-from app.utils.database import get_supabase_client
+from app.core.clients import get_supabase_client
 from app.utils.time_utils import get_brazil_time
 
 logger = get_logger(__name__)

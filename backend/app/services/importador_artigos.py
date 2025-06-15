@@ -1,401 +1,269 @@
-# app/services/importador_artigos.py
+# app/services/importador_artigos.py (VERSÃO FINAL E DEFINITIVA)
 
 import logging
 import asyncio
-import os
-from typing import List, Dict, Any, Optional
-from datetime import datetime, timezone # Adicionado timezone
-import requests
-from fastapi import HTTPException
+import httpx
+from typing import List, Dict, Any, Optional, Tuple
+from datetime import datetime, timezone, timedelta
+import re
 from app.core.clients import get_weaviate_client, get_openai_client
+from app.core.config import get_settings
+from app.core.dynamic_config import obter_parametro
 from weaviate.classes.config import Property, DataType
-from app.core.config import settings
 from weaviate.collections.classes.filters import Filter
 from weaviate.collections.classes.data import DataObject
-import re
+from weaviate.util import generate_uuid5
+from weaviate.exceptions import WeaviateInsertManyAllFailedError
+from dateutil import parser
+import csv
 
 
 logger = logging.getLogger(__name__)
+import_status = {"in_progress": False, "message": "Nenhuma importação em andamento."}
 
-# Definições de variáveis globais do módulo
-base_url = settings.MOVI_LIST_URL
-token = settings.MOVI_TOKEN  # <--- AQUI O TOKEN É DEFINIDO
-base_detail_url = settings.MOVI_DETAIL_URL
-
-
-# ... (base_url, token, base_detail_url, logger permanecem os mesmos) ...
-# ... (converter_iso_para_data, buscar_lista_artigos, buscar_detalhes_artigo, gerar_embedding_conteudo como na refatoração anterior) ...
-
-# ===================================================================================
-# FUNÇÕES CHAVE MODIFICADAS/REVISADAS
-# ===================================================================================
-
-def converter_iso_para_data(data_iso: str) -> Optional[str]:
+# --- FUNÇÕES AUXILIARES ---
+def converter_iso_para_timestamp_utc3(iso_str: str) -> float:
     """
-    Converte data ISO para formato string YYYY-MM-DDTHH:MM:SSZ,
-    truncando microssegundos para 6 dígitos se necessário.
+    Converte string ISO variada em timestamp UTC-3.
+    Usa parser.isoparse e ajusta fuso.
     """
-    if not data_iso:
-        return None
+    if not iso_str or not isinstance(iso_str, str):
+        raise ValueError(f"Timestamp inválido: {iso_str!r}")
+    dt = parser.isoparse(iso_str)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone(timedelta(hours=-3))).timestamp()
 
-    # Regex para capturar:
-    # Grupo 1: Data e hora até segundos (YYYY-MM-DDTHH:MM:SS)
-    # Grupo 2: Parte dos microssegundos, opcional (começando com '.')
-    # Grupo 3: Timezone (Z, +HH:MM, ou -HH:MM), opcional
-    match = re.match(r'^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(\.\d+)?(Z|[+-]\d{2}:\d{2})?$', data_iso.strip())
 
-    # Pré-sanitização de problemas conhecidos
-    data_iso = data_iso.strip()
-    data_iso = re.sub(r'--', '-', data_iso)  # Corrige duplo traço
-
-    if not match:
-        logger.warning(f"⚠️ Formato de data ISO não reconhecido inicialmente: '{data_iso}'. Retornando None.")
-        return None
-
-    parte_data_segundos = match.group(1)
-    microssegundos_str_com_ponto = match.group(2) # Ex: ".1234567" ou None
-    timezone_str_original = match.group(3)       # Ex: "Z", "+03:00" ou None
-
-    data_iso_ajustada = parte_data_segundos
-
-    if microssegundos_str_com_ponto:
-        ms_digits = microssegundos_str_com_ponto[1:] 
-        if len(ms_digits) > 6:
-            ms_digits = ms_digits[:6] # Trunca para 6 dígitos
-        if ms_digits: 
-             data_iso_ajustada += f".{ms_digits}"
-
-    if timezone_str_original:
-        if timezone_str_original.upper() == "Z":
-            data_iso_ajustada += "+00:00"
-        else:
-            data_iso_ajustada += timezone_str_original
-    else:
-        data_iso_ajustada += "+00:00" # Assume UTC se nenhum timezone for fornecido
-        
+def normalizar_para_iso_brasilia(data_iso: str) -> Optional[str]:
+    """
+    Converte ISO Movidesk para string ISO no fuso de Brasília.
+    """
     try:
-        dt = datetime.fromisoformat(data_iso_ajustada)
-        if dt.tzinfo is None: 
-            dt_utc = dt.replace(tzinfo=timezone.utc)
-        else:
-            dt_utc = dt.astimezone(timezone.utc)
-            
-        return dt_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
-    except ValueError as e:
-        logger.warning(f"⚠️ Erro ao converter data ISO '{data_iso}' (ajustada para '{data_iso_ajustada}'): {e}. Retornando None.")
+        ts = converter_iso_para_timestamp_utc3(data_iso)
+        dt = datetime.fromtimestamp(ts, tz=timezone(timedelta(hours=-3)))
+        return dt.isoformat()
+    except Exception:
         return None
-    
-async def buscar_lista_artigos(pagina: int = 1, limite: int = 50) -> List[Dict[str, Any]]:
-    """Busca lista paginada de artigos do Movidesk."""
-    try:
-        logger.info(f"🔍 Buscando página {pagina} (limite {limite})...")
-        params = {"token": token, "page": pagina - 1, "pageSize": limite}
-        response = requests.get(base_url, params=params, headers={"Content-Type": "application/json"}, timeout=600000)
-        response.raise_for_status()
-        data = response.json()
-        artigos = data.get("items", data) if isinstance(data, dict) else data
 
-        if not isinstance(artigos, list):
-            logger.error(f"❌ Resposta não é uma lista (Página {pagina}): {type(artigos)} - {str(artigos)[:500]}")
-            return []
+# Alias para consistência
+def normalizar_data_movidesk(data_iso: str) -> Optional[str]:
+    return normalizar_para_iso_brasilia(data_iso)
 
-        logger.info(f"✅ Página {pagina} retornou {len(artigos)} artigos.")
-        return artigos
 
-    except Exception as e:
-        logger.error(f"❌ Erro ao buscar lista de artigos (Página {pagina}): {str(e)}")
+async def buscar_lista_artigos(
+    client: httpx.AsyncClient,
+    pagina: int,
+    limite: int,
+    status: int = 1  # por padrão busca somente artigos publicados
+) -> List[Dict]:
+    """
+    Busca artigos na API Movidesk, filtrando por status (1=publicado, 4=suspenso).
+    Retorna lista de dicionários com fields 'id', 'updatedAt', 'title', etc.
+    """
+    settings = get_settings()
+    base_url = obter_parametro("movi_list_url")
+    token = settings.MOVI_TOKEN
+    if not base_url or not token:
         return []
 
+    # monta os parâmetros, incluindo status=1
+    params = {
+        "token": token,
+        "page": pagina,
+        "$top": limite,
+        "$select": "id,updatedAt,title",
+        "status": status,
+    }
+
+    resp = await client.get(
+        base_url,
+        params=params,
+        timeout=30
+    )
+    resp.raise_for_status()
+    data = resp.json()
+    items = data if isinstance(data, list) else data.get("items", [])
+
+    # log de ID e título para comparação
+    for art in items:
+        art_id = art.get("id")
+        art_title = art.get("title", "<sem título>")
+        logger.info(f"📋 Lista Movidesk - ID {art_id} | Título: {art_title}")
+
+    return items
 
 
-async def buscar_detalhes_artigo(artigo_id: int) -> Optional[Dict[str, Any]]:
-    """Busca detalhes de um artigo específico."""
-    try:
-        logger.info(f"🔍 Buscando detalhes do artigo ID: {artigo_id}")
-        url = f"{base_detail_url}/{artigo_id}"
-        params = {"token": token}
-        response = requests.get(url, headers={"Content-Type": "application/json"}, params=params, timeout=600000)
-        response.raise_for_status()
-        artigo = response.json()
 
-        if not isinstance(artigo, dict):
-            logger.error(f"❌ Resposta inválida (artigo ID {artigo_id}): {str(artigo)[:500]}")
-            return None
-
-        logger.info(f"✅ Artigo {artigo_id} - Título: {artigo.get('title', '(sem título)')}")
-        return artigo
-
-    except Exception as e:
-        logger.error(f"❌ Erro ao buscar detalhes do artigo {artigo_id}: {str(e)}")
+async def buscar_detalhes_artigo(client: httpx.AsyncClient, artigo_id: int) -> Optional[Dict]:
+    settings = get_settings()
+    url = obter_parametro("movi_detail_url")
+    if not url:
         return None
+    resp = await client.get(f"{url}/{artigo_id}", params={"token": settings.MOVI_TOKEN}, timeout=20)
+    resp.raise_for_status()
+    art = resp.json()
+    art["createdDate"] = normalizar_data_movidesk(art.get("createdDate"))
+    art["updatedDate"] = normalizar_data_movidesk(art.get("updatedDate"))
+    return art
+
 
 async def gerar_embedding_conteudo(conteudo: str) -> Optional[List[float]]:
-    if not conteudo or not conteudo.strip(): # Verifica se o conteúdo é vazio ou só espaços
-        logger.warning("⚠️ Conteúdo vazio ou apenas espaços fornecido para geração de embedding. Pulando.")
-        return None
+    """Gera o embedding vetorial para um texto."""
+    if not conteudo or not conteudo.strip(): return None
     try:
-        logger.debug(f"🧠 Iniciando geração de embedding para conteúdo de {len(conteudo)} caracteres.")
-        openai_client = get_openai_client()
-        response = openai_client.embeddings.create(
-            model="text-embedding-ada-002", # settings.OPENAI_EMBEDDING_MODEL
-            input=conteudo.replace("\n", " ") # Normalização simples sugerida pela OpenAI
-        )
-        embedding = response.data[0].embedding
-        logger.debug("✅ Embedding gerado com sucesso.")
-        return embedding
+        return get_openai_client().embeddings.create(model=obter_parametro("embedding_model"), input=conteudo.replace("\n", " ")).data[0].embedding
     except Exception as e:
-        # Adicionar mais detalhes sobre o erro da OpenAI, se possível
-        # e.g. if hasattr(e, 'response') and e.response is not None: logger.error(e.response.text)
-        logger.error(f"❌ Erro ao gerar embedding: {str(e)}")
+        logger.error(f"❌ Erro ao gerar embedding: {e}")
         return None
-
-def verificar_artigo_precisa_atualizar(collection, artigo_id: int, movidesk_updated_date_str: Optional[str]) -> bool:
-    logger.info(f"🔍 Verificando necessidade de atualização para Artigo ID: {artigo_id}")
-    logger.debug(f"🕑 Data de atualização (Movidesk string): {movidesk_updated_date_str}")
-
-    try:
-        where_filter = Filter.by_property("movidesk_id").equal(artigo_id)
-        response = collection.query.fetch_objects(filters=where_filter, limit=1)
-        
-        existing_objects = response.objects
-        if not existing_objects:
-            logger.info(f"🆕 Artigo ID {artigo_id} não encontrado no Weaviate. Marcado para importação.")
-            return True
-
-        weaviate_properties = existing_objects[0].properties
-        weaviate_updated_date_val = weaviate_properties.get("updatedDate")
-        
-        logger.debug(f"🕑 Data de atualização (Weaviate raw value): {weaviate_updated_date_val}, Tipo: {type(weaviate_updated_date_val)}")
-
-        if not movidesk_updated_date_str:
-            logger.warning(f"⚠️ Artigo ID {artigo_id} (Movidesk) não tem 'updatedDate'. Forçando atualização.")
-            return True
-
-        if weaviate_updated_date_val is None:
-            logger.info(f"ℹ️ Artigo ID {artigo_id} existe no Weaviate mas sem 'updatedDate'. Movidesk tem data. Marcado para atualização.")
-            return True
-            
-        # Converter a data do Weaviate (que pode ser string ou datetime dependendo de como foi inserida e recuperada)
-        if isinstance(weaviate_updated_date_val, str):
-            # Se for string, tentar converter para datetime UTC
-            weaviate_dt_str_iso = weaviate_updated_date_val
-            if weaviate_dt_str_iso.endswith("Z"):
-                weaviate_dt_str_iso = weaviate_dt_str_iso[:-1] + "+00:00"
-            try:
-                weaviate_dt_utc = datetime.fromisoformat(weaviate_dt_str_iso)
-                if weaviate_dt_utc.tzinfo is None: # Garantir que é timezone-aware
-                    weaviate_dt_utc = weaviate_dt_utc.replace(tzinfo=timezone.utc)
-            except ValueError:
-                 logger.error(f"❌ Data do Weaviate para artigo {artigo_id} é string mas não pôde ser convertida: '{weaviate_updated_date_val}'. Forçando atualização.")
-                 return True
-        elif isinstance(weaviate_updated_date_val, datetime):
-            # Se já é datetime, garantir que é UTC
-            if weaviate_updated_date_val.tzinfo is None:
-                weaviate_dt_utc = weaviate_updated_date_val.replace(tzinfo=timezone.utc)
-            else:
-                weaviate_dt_utc = weaviate_updated_date_val.astimezone(timezone.utc)
-        else:
-            logger.error(f"❌ Tipo de data do Weaviate inesperado para artigo {artigo_id}: {type(weaviate_updated_date_val)}. Forçando atualização.")
-            return True
-
-        # Converter string da data do Movidesk ("YYYY-MM-DDTHH:MM:SSZ") para datetime UTC
-        movidesk_dt_str_iso = movidesk_updated_date_str
-        if movidesk_dt_str_iso.endswith("Z"):
-            movidesk_dt_str_iso = movidesk_dt_str_iso[:-1] + "+00:00"
-        
-        movidesk_dt_utc = datetime.fromisoformat(movidesk_dt_str_iso)
-        
-        # Compara os dois objetos datetime UTC (ignorando microssegundos para evitar falsos positivos)
-        if movidesk_dt_utc.replace(microsecond=0) != weaviate_dt_utc.replace(microsecond=0):
-            logger.info(f"🔄 Artigo ID {artigo_id} precisa ser atualizado. Data Movidesk: {movidesk_dt_utc}, Data Weaviate: {weaviate_dt_utc}")
-            return True
-        else:
-            logger.info(f"✅ Artigo ID {artigo_id} está atualizado (Datas: {movidesk_dt_utc}). Será pulado.")
-            return False
-
-    except ValueError as ve: # Captura erros de datetime.fromisoformat se a string for inválida
-        logger.error(f"❌ Erro de formatação de data ao comparar (Artigo ID {artigo_id}). Movidesk str: '{movidesk_updated_date_str}'. Erro: {ve}. Forçando atualização.")
-        return True
-    except Exception as e:
-        logger.error(f"❌ Erro crítico ao verificar necessidade de atualização do artigo {artigo_id}: {str(e)}. Forçando atualização.")
-        return True
 
 async def verificar_e_criar_schema(resetar_base: bool = True):
-    """Verifica e cria o schema 'Article' no Weaviate."""
+    """Verifica e cria o schema 'Article' no Weaviate com todas as propriedades necessárias."""
     client = get_weaviate_client()
-    collection_name = "Article" # Idealmente de settings.WEAVIATE_COLLECTION_NAME
-    try:
-        existe = client.collections.exists(collection_name)
-        if resetar_base and existe:
-            logger.info(f"🗑️ Excluindo collection '{collection_name}'...")
-            client.collections.delete(collection_name)
-            logger.info(f"🗑️ Collection '{collection_name}' excluída com sucesso.")
-            await asyncio.sleep(2) 
-            existe = False
+    collection_name = "Article"
+    if resetar_base and client.collections.exists(collection_name):
+        client.collections.delete(collection_name)
+        await asyncio.sleep(2)
+    if not client.collections.exists(collection_name):
+        client.collections.create(name=collection_name, properties=[
+            Property(name="movidesk_id", data_type=DataType.INT),
+            Property(name="title", data_type=DataType.TEXT),
+            Property(name="content", data_type=DataType.TEXT),
+            Property(name="resumo", data_type=DataType.TEXT),
+            Property(name="status", data_type=DataType.TEXT),
+            Property(name="url", data_type=DataType.TEXT),
+            Property(name="createdDate", data_type=DataType.TEXT),
+            Property(name="updatedDate", data_type=DataType.TEXT),
+            Property(name="categoria", data_type=DataType.TEXT),
+        ])
 
-        if not existe:
-            logger.info(f"✨ Criando schema para collection '{collection_name}'...")
-            client.collections.create(
-                name=collection_name,
-                properties=[
-                    Property(name="title", data_type=DataType.TEXT, description="Título do artigo"),
-                    Property(name="content", data_type=DataType.TEXT, description="Conteúdo HTML completo do artigo"),
-                    Property(name="resumo", data_type=DataType.TEXT, description="Resumo curto do artigo"),
-                    Property(name="url", data_type=DataType.TEXT, description="URL pública do artigo"),
-                    Property(name="status", data_type=DataType.TEXT, description="Status do artigo (ex: Publicado)"),
-                    Property(name="movidesk_id", data_type=DataType.INT, description="ID do artigo no Movidesk"),
-                    Property(name="createdDate", data_type=DataType.DATE, description="Data de criação do artigo"),
-                    Property(name="updatedDate", data_type=DataType.DATE, description="Data da última atualização do artigo"),
-                ]
-            )
-            logger.info(f"✨ Schema '{collection_name}' criado com sucesso.")
-            await asyncio.sleep(1)
-        else:
-            logger.info(f"ℹ️ Collection '{collection_name}' já existe (reset_base=False ou falha na exclusão).")
-    except Exception as e:
-        logger.error(f"❌ Erro fatal ao verificar/criar schema '{collection_name}': {str(e)}")
-        raise 
-
+# --- FUNÇÃO PRINCIPAL DE IMPORTAÇÃO ---
 async def importar_artigos_movidesk(progresso_callback=None, reset_base: bool = True):
-    logger.info(f"🚀 Iniciando importação (reset_base={reset_base})")
+    if import_status["in_progress"]:
+        raise RuntimeError("Uma importação já está em andamento.")
+    import_status["in_progress"] = True
+    import_status["message"] = f"Importação iniciada às {datetime.now().strftime('%H:%M:%S')}"
+
+    contadores = {
+        "paginas": 0,
+        "enviados": 0,
+        "pulados_sem_conteudo": 0,
+        "pulados_embedding": 0,
+        "falhas_datas": 0
+    }
+    pagina = 0
+    batch_size = int(obter_parametro("rag_search_limit", 30))
+    # lista para CSV: armazena tuplas (id, titulo)
+    all_artigos_meta: List[Tuple[int, str]] = []
+
     try:
-        # Inicialização
-        client = get_weaviate_client()
         await verificar_e_criar_schema(resetar_base=reset_base)
-        collection = client.collections.get("Article")
+        collection = get_weaviate_client().collections.get("Article")
 
-        # Contadores
-        total_geral_inseridos_weaviate = 0
-        total_processados_para_atualizacao = 0
-        total_pulados_ja_atualizado_no_weaviate = 0
-        total_pulados_outros_motivos = 0
+        async with httpx.AsyncClient() as client:
+            while True:
+                artigos = await buscar_lista_artigos(client, pagina, batch_size)
+                if not artigos:
+                    break
 
+                # Acumula metadados para CSV
+                for art in artigos:
+                    aid = art.get("id")
+                    titulo = art.get("title", "")
+                    all_artigos_meta.append((aid, titulo))
 
-        pagina_atual_movidesk = 1  # <-- Adicione aqui (ou mantenha)
-        ids_adicionados_ao_batch_nesta_execucao = set() 
-        TAMANHO_BATCH = int(os.getenv("MOVIDESK_API_BATCH_SIZE", 30))
+                contadores["paginas"] += 1
+                logger.info(f"Página {pagina}: obtidos {len(artigos)} artigos")
+                batch = []
 
-        while True:
-            logger.info(f"🔄 Processando página {pagina_atual_movidesk} do Movidesk (batch size: {TAMANHO_BATCH})...")
-            artigos_da_pagina_api = await buscar_lista_artigos(pagina_atual_movidesk, limite=TAMANHO_BATCH)
-
-            if not artigos_da_pagina_api:
-                logger.info(f"✅ Fim da paginação da API Movidesk — página {pagina_atual_movidesk} não retornou artigos.")
-                break
-
-            batch_para_inserir_nesta_iteracao: List[DataObject] = []
-
-            for idx, item_da_lista_api in enumerate(artigos_da_pagina_api, 1):
-                artigo_id_api = item_da_lista_api.get("id")
-                titulo_lista_api = item_da_lista_api.get("title", "(Título não disponível na lista)")
-                status_lista_api = item_da_lista_api.get("articleStatus", "(Status não disponível na lista)")
-
-                logger.info(f"🔎 Item {idx}/{len(artigos_da_pagina_api)} (Pág. {pagina_atual_movidesk}): ID {artigo_id_api}, Título Lista: '{titulo_lista_api}'")
-
-                if not artigo_id_api:
-                    logger.warning("⚠️ Item da lista Movidesk sem ID. Pulando.")
-                    total_pulados_outros_motivos += 1
-                    continue
-
-                if artigo_id_api in ids_adicionados_ao_batch_nesta_execucao:
-                    logger.warning(f"🔁 Artigo ID {artigo_id_api} ('{titulo_lista_api}') já foi adicionado ao batch nesta execução (provável duplicata da API Movidesk). Pulando.")
-                    total_pulados_outros_motivos += 1
-                    continue
-
-                detalhes_artigo_api = await buscar_detalhes_artigo(artigo_id_api)
-                if not detalhes_artigo_api or not detalhes_artigo_api.get("contentText", "").strip():
-                    logger.warning(f"⚠️ Artigo ID {artigo_id_api} ('{titulo_lista_api}') sem detalhes válidos ou sem contentText. Pulando.")
-                    total_pulados_outros_motivos += 1
-                    continue
-
-                updated_date_movidesk_str_fmt = converter_iso_para_data(detalhes_artigo_api.get("updatedDate"))
-
-                if not reset_base:
-                    if not verificar_artigo_precisa_atualizar(collection, artigo_id_api, updated_date_movidesk_str_fmt):
-                        total_pulados_ja_atualizado_no_weaviate += 1
+                for item in artigos:
+                    aid = item.get("id")
+                    if not aid:
+                        logger.warning("Artigo sem ID recebido, pulado.")
+                        contadores["falhas_datas"] += 1
                         continue
-                else:
-                    logger.debug(f"✅ [RESET] Inclusão de artigo ID {artigo_id_api} (reset_base=True).")
 
-                total_processados_para_atualizacao += 1
+                    uuid = generate_uuid5(str(aid))
+                    deve = False
+                    motivo = None
 
-                conteudo_embedding = detalhes_artigo_api.get("contentText", "").strip()
-                vetor_embedding = await gerar_embedding_conteudo(conteudo_embedding)
-                if not vetor_embedding:
-                    logger.error(f"❌ Falha ao gerar embedding para Artigo ID {artigo_id_api} ('{detalhes_artigo_api.get('title')}'). Pulando.")
-                    total_pulados_outros_motivos += 1
-                    continue
+                    # Verifica se precisa processar
+                    if reset_base or not collection.data.exists(uuid=uuid):
+                        deve = True
+                        motivo = "novo artigo"
+                    else:
+                        obj = collection.query.fetch_object_by_id(uuid=uuid)
+                        weav_date = obj.properties.get("updatedDate")
+                        try:
+                            det = await buscar_detalhes_artigo(client, aid)
+                            raw_date = det.get("updatedDate") if det else None
+                            t1 = converter_iso_para_timestamp_utc3(raw_date)
+                            t2 = converter_iso_para_timestamp_utc3(weav_date)
+                            if abs(t1 - t2) > 1:
+                                deve = True
+                                motivo = "timestamps divergem"
+                        except Exception:
+                            contadores["falhas_datas"] += 1
+                            deve = True
+                            motivo = "erro ao comparar datas"
 
-                props_objeto_weaviate = {
-                    "movidesk_id": artigo_id_api,
-                    "title": detalhes_artigo_api.get("title", ""),
-                    "content": conteudo_embedding,
-                    "resumo": detalhes_artigo_api.get("shortContent", "") or "",
-                    "status": str(detalhes_artigo_api.get("articleStatus", "") or detalhes_artigo_api.get("statusDescription", "Desconhecido")),
-                    "url": f"{os.getenv('BASE_ARTICLE_URL', 'http://localhost/artigo')}/{artigo_id_api}/{detalhes_artigo_api.get('slug', '')}",
-                    "createdDate": converter_iso_para_data(detalhes_artigo_api.get("createdDate")),
-                    "updatedDate": updated_date_movidesk_str_fmt
-                }
+                    if not deve:
+                        logger.debug(f"Artigo {aid} sem alterações, pulado.")
+                        continue
 
-                batch_para_inserir_nesta_iteracao.append(
-                    DataObject(properties=props_objeto_weaviate, vector=vetor_embedding)
-                )
-                ids_adicionados_ao_batch_nesta_execucao.add(artigo_id_api)
-                logger.debug(f"➕ Artigo ID {artigo_id_api} ('{props_objeto_weaviate['title']}') adicionado ao batch.")
+                    det = await buscar_detalhes_artigo(client, aid)
+                    raw_date = det.get("updatedDate") if det else None
+                    weav_date = weav_date if 'weav_date' in locals() else None
+                    logger.info(
+                        f"Artigo {aid}: processar devido a {motivo}. MoviData: {raw_date!r}, WeavData: {weav_date!r}"
+                    )
 
-                if progresso_callback:
-                    await progresso_callback({
-                        "status": "em_progresso", "pagina_atual_movidesk": pagina_atual_movidesk,
-                        "item_processado_na_pagina": idx, "total_itens_na_pagina_api": len(artigos_da_pagina_api),
-                        "total_geral_inseridos_weaviate": total_geral_inseridos_weaviate,
-                        "total_processados_para_atualizacao": total_processados_para_atualizacao,
-                        "total_pulados_ja_atualizado_no_weaviate": total_pulados_ja_atualizado_no_weaviate,
-                        "total_pulados_outros_motivos": total_pulados_outros_motivos,
-                        "ultimo_artigo_adicionado_batch": props_objeto_weaviate['title']
-                    })
+                    if not det or not det.get("contentText"):
+                        contadores["pulados_sem_conteudo"] += 1
+                        logger.warning(f"Artigo {aid} sem conteúdo, mas será importado.")
 
-            if batch_para_inserir_nesta_iteracao:
-                try:
-                    logger.info(f"📦 Enviando batch de {len(batch_para_inserir_nesta_iteracao)} artigos para Weaviate...")
-                    collection.data.insert_many(objects=batch_para_inserir_nesta_iteracao)
-                    total_geral_inseridos_weaviate += len(batch_para_inserir_nesta_iteracao)
-                    logger.info(f"🚀 Batch de {len(batch_para_inserir_nesta_iteracao)} artigos inserido. Total Weaviate: {total_geral_inseridos_weaviate}")
-                    await asyncio.sleep(0.2)
-                except Exception as e_insert:
-                    logger.error(f"❌❌ Erro CRÍTICO ao inserir batch no Weaviate: {e_insert}. Artigos neste batch podem não ter sido salvos.")
-                    raise
+                    props = {
+                        "movidesk_id": aid,
+                        "title": det.get("title", "") if det else "",
+                        "content": det.get("contentText") or "" if det else "",
+                        "resumo": det.get("shortContent", "") if det else "",
+                        "status": det.get("statusDescription", "") if det else "",
+                        "url": f"{obter_parametro('base_article_url','')}/{aid}/{det.get('slug','')}" if det else "",
+                        "createdDate": det.get("createdDate") if det else None,
+                        "updatedDate": det.get("updatedDate") if det else None,
+                        "categoria": det.get("categoryName", "geral") if det else "geral"
+                    }
+                    vetor = await gerar_embedding_conteudo(props["content"])
+                    if not vetor:
+                        contadores["pulados_embedding"] += 1
+                        logger.warning(f"Artigo {aid} sem embedding, mas será importado.")
 
-            pagina_atual_movidesk += 1
+                    batch.append(DataObject(properties=props, vector=vetor, uuid=uuid))
 
-        # Finalização
-        logger.info("🎉 Importação concluída!")
-        summary = (
-            f"Resumo FINAL da Importação:\n"
-            f"  - Total de páginas processadas: {pagina_atual_movidesk - 1}\n"
-            f"  - Total de artigos efetivamente inseridos/atualizados no Weaviate: {total_geral_inseridos_weaviate}\n"
-            f"  - Total de artigos que passaram pela lógica para atualização/inserção: {total_processados_para_atualizacao}\n"
-            f"  - Total de artigos pulados (já atualizados no Weaviate): {total_pulados_ja_atualizado_no_weaviate}\n"
-            f"  - Total de artigos pulados (outros motivos: erro, sem conteúdo, duplicata da API lista): {total_pulados_outros_motivos}"
+                if batch:
+                    try:
+                        collection.data.insert_many(objects=batch)
+                        contadores["enviados"] += len(batch)
+                        logger.info(f"Página {pagina}: {len(batch)} artigos gravados no Weaviate")
+                    except WeaviateInsertManyAllFailedError as e:
+                        logger.error(f"Erro ao inserir batch página {pagina}: {e}")
+
+                pagina += 1
+
+        # Resumo final
+        logger.info(
+            f"Importação concluída: {contadores['paginas']} páginas, {contadores['enviados']} gravados, "
+            f"{contadores['pulados_sem_conteudo']} sem conteúdo, "
+            f"{contadores['pulados_embedding']} sem embedding, {contadores['falhas_datas']} falhas de data"
         )
 
-        logger.info(summary)
+        # Gera CSV complementar com id e título
+        csv_path = 'artigos_movidesk.csv'
+        with open(csv_path, 'w', newline='', encoding='utf-8') as csvfile:
+            writer = csv.writer(csvfile)
+            writer.writerow(['id', 'titulo'])
+            writer.writerows(all_artigos_meta)
+        logger.info(f"Arquivo CSV gerado: {csv_path}")
 
-        return {
-            "status": "sucesso",
-            "total_paginas": pagina_atual_movidesk - 1,
-            "total_geral_inseridos_weaviate": total_geral_inseridos_weaviate,
-            "total_logica_atualizacao": total_processados_para_atualizacao,
-            "total_pulados_ja_atualizado": total_pulados_ja_atualizado_no_weaviate,
-            "total_pulados_outros": total_pulados_outros_motivos,
-            "mensagem": "Importação finalizada com sucesso."
-        }
-
-
-    except Exception as e:
-        logger.exception(f"❌ ERRO FATAL DURANTE IMPORTAÇÃO: {str(e)}")
-        if progresso_callback:
-            await progresso_callback({
-                "status": "erro",
-                "mensagem": f"Erro fatal: {str(e)}"
-            })
-        raise HTTPException(status_code=500, detail=f"Erro fatal durante a importação: {str(e)}")
+    finally:
+        import_status["in_progress"] = False

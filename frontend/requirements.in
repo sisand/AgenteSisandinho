@@ -6,3 +6,4 @@ streamlit-autorefresh==0.0.1  # Componente específico que você adicionou
 pandas==2.2.1              # Para manipulação de dados e st.dataframe
 requests==2.31.0           # Para o api_client se comunicar com o backend
 pytesseract==0.3.10          # Para a funcionalidade de OCR
+streamlit-authenticator

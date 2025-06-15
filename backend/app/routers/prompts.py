@@ -1,52 +1,55 @@
-from fastapi import APIRouter, Body, Path, HTTPException
-from typing import Optional
-from pydantic import BaseModel
+# app/routers/prompts.py
+"""
+Router para os endpoints da API relacionados com a gestão de Prompts.
+"""
+from fastapi import APIRouter, HTTPException, status
+from typing import List, Dict, Any
 
-from app.services.prompts import buscar_prompt, atualizar_prompt, listar_prompts
+# Importa o modelo de requisição centralizado
+from app.models.api import RequisicaoPrompt
+
+# Importa as funções de serviço refatoradas
+from app.services.prompts import criar_novo_prompt, atualizar_prompt_por_id, listar_prompts_ativos
 
 router = APIRouter()
 
-
-class PromptUpdate(BaseModel):
-    nome: Optional[str] = None
-    conteudo: str
-    descricao: Optional[str] = None
-    ativo: bool = True
+@router.get("/ativos", response_model=List[Dict[str, Any]])
+def rota_listar_prompts_ativos():
+    """Endpoint para listar todos os prompts ativos no sistema."""
+    return listar_prompts_ativos()
 
 
-@router.get("/ativos")
-def get_prompts_ativos():
-    """Retorna todos os prompts ativos no sistema"""
-    return listar_prompts()
+@router.put("/{id_prompt}")
+def rota_atualizar_prompt(id_prompt: int, dados_prompt: RequisicaoPrompt):
+    """Endpoint para atualizar um prompt existente, identificado pelo seu ID."""
+    sucesso = atualizar_prompt_por_id(
+        id_prompt=id_prompt, 
+        nome=dados_prompt.nome, 
+        conteudo=dados_prompt.conteudo
+    )
+    
+    if not sucesso:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, 
+            detail="Ocorreu um erro interno ao tentar atualizar o prompt."
+        )
+        
+    return {"status": "sucesso", "mensagem": "Prompt atualizado com sucesso."}
 
 
-@router.get("/{nome}")
-def get_prompt(nome: str = Path(..., description="Nome do prompt a ser buscado")):
-    """
-    Busca um prompt específico pelo nome.
-    """
-    prompt_content = buscar_prompt(nome)
-    if "erro" in prompt_content.lower():
-        raise HTTPException(status_code=404, detail=f"Prompt '{nome}' não encontrado")
-
-    return {"nome": nome, "conteudo": prompt_content}
-
-
-@router.put("/{nome}")
-def update_prompt(
-    nome: str = Path(..., description="Nome do prompt"),
-    prompt_data: PromptUpdate = Body(...)
-):
-    """
-    Atualiza ou cria um prompt.
-    """
-    success = atualizar_prompt(
-        nome=nome,
-        conteudo=prompt_data.conteudo,
-        descricao=prompt_data.descricao
+@router.post("/", status_code=status.HTTP_201_CREATED)
+def rota_criar_prompt(dados_prompt: RequisicaoPrompt):
+    """Endpoint para criar um novo prompt no sistema."""
+    sucesso = criar_novo_prompt(
+        nome=dados_prompt.nome,
+        conteudo=dados_prompt.conteudo
     )
 
-    if not success:
-        raise HTTPException(status_code=500, detail=f"Erro ao atualizar prompt '{nome}'")
+    if not sucesso:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Ocorreu um erro ao criar o prompt."
+        )
+    
+    return {"status": "sucesso", "mensagem": "Prompt criado com sucesso."}
 
-    return {"status": "success", "message": f"Prompt '{nome}' atualizado com sucesso"}

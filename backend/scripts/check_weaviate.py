@@ -1,6 +1,6 @@
 import weaviate
 import json
-from app.core.config import settings  # Importa suas configurações
+from app.core.config import get_settings  # Importa suas configurações
 
 print("Conectando ao Weaviate para inspecionar o esquema...")
 

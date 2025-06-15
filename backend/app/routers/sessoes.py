@@ -6,10 +6,6 @@ from pydantic import BaseModel
 from typing import Dict, Any, Optional, List
 from app.services.sessoes import (
     obter_ou_criar_sessao,
-    atualizar_ultima_atividade,
-    encerrar_sessao,
-    encerrar_sessao_antiga,
-    obter_detalhes_sessao,
     listar_sessoes_usuario
 )
 from app.utils.logger import get_logger

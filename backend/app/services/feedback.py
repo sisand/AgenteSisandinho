@@ -1,4 +1,4 @@
-from app.utils.database import get_supabase_client
+from app.core.clients import get_supabase_client
 from app.utils.logger import get_logger
 from app.utils.time_utils import get_brazil_time
 

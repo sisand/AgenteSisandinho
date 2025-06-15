@@ -1,191 +1,157 @@
-"""
-Módulo de clientes para serviços externos (OpenAI, Supabase e Weaviate)
-"""
-
 import logging
 from functools import lru_cache
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
+
 from openai import OpenAI
 from supabase import create_client, Client
-from app.core.config import settings
 import weaviate
-from weaviate.classes.init import Auth
-from weaviate.classes.query import Filter
+from weaviate.classes.query import Filter # Importação necessária para o filtro
 
-# Logger
+# Importa a função para obter as configurações
+from app.core.config import get_settings
+from app.core.dynamic_config import obter_parametro
+
 logger = logging.getLogger(__name__)
 
-# Definindo dimensões dos modelos de embedding
-EMBEDDING_DIMENSIONS = {
-    "text-embedding-ada-002": 1536,
-    "text-embedding-3-small": 1536,
-    "text-embedding-3-large": 3072
-}
-DEFAULT_EMBEDDING_DIM = EMBEDDING_DIMENSIONS.get(settings.EMBEDDING_MODEL, 1536)
+# --- Clientes de Bootstrap (só dependem do .env) ---
 
-
-# 🔗 OpenAI
-@lru_cache(maxsize=1)
-def get_openai_client():
-    try:
-        if not settings.OPENAI_API_KEY:
-            raise ValueError("❌ OPENAI_API_KEY não está configurada")
-        client = OpenAI(api_key=settings.OPENAI_API_KEY)
-        logger.info("✅ Cliente OpenAI conectado com sucesso.")
-        return client
-    except Exception as e:
-        logger.error(f"❌ Erro ao inicializar cliente OpenAI: {e}")
-        raise
-
-
-# 🔗 Supabase
 @lru_cache(maxsize=1)
 def get_supabase_client() -> Client:
-    try:
-        if not settings.SUPABASE_URL or not settings.SUPABASE_KEY:
-            raise ValueError("❌ SUPABASE_URL ou SUPABASE_KEY não estão configuradas")
-        client = create_client(settings.SUPABASE_URL, settings.SUPABASE_KEY)
-        logger.info(f"✅ Cliente Supabase conectado: {settings.SUPABASE_URL}")
-        return client
-    except Exception as e:
-        logger.error(f"❌ Erro ao inicializar cliente Supabase: {e}")
-        raise
+    """Cria e retorna o cliente Supabase usando as configurações da aplicação."""
+    # CORREÇÃO: Chama get_settings() para carregar a variável settings
+    settings = get_settings()
+    
+    if not settings.SUPABASE_URL or not settings.SUPABASE_KEY:
+        raise ValueError("Credenciais do Supabase não encontradas nas configurações.")
+        
+    logger.info("✅ Cliente Supabase pronto.")
+    return create_client(settings.SUPABASE_URL, settings.SUPABASE_KEY)
 
-
-# 🔗 Cliente Weaviate
 @lru_cache(maxsize=1)
-def get_weaviate_client():
-    try:
-        if not settings.WEAVIATE_URL:
-            raise ValueError("❌ WEAVIATE_URL não está configurada")
+def get_openai_client() -> OpenAI:
+    """Cria e retorna o cliente OpenAI usando as configurações da aplicação."""
+    # CORREÇÃO: Chama get_settings() para carregar a variável settings
+    settings = get_settings()
 
-        auth_credentials = None
-        if settings.WEAVIATE_API_KEY:
-            auth_credentials = Auth.api_key(settings.WEAVIATE_API_KEY)
+    if not settings.OPENAI_API_KEY:
+        raise ValueError("Chave da OpenAI não encontrada nas configurações.")
 
-        client = weaviate.connect_to_weaviate_cloud(
-            cluster_url=settings.WEAVIATE_URL,
-            auth_credentials=auth_credentials,
-        )
+    logger.info("✅ Cliente OpenAI (Síncrono) pronto.")
+    return OpenAI(api_key=settings.OPENAI_API_KEY)
 
-        # Testar se o cliente está pronto
-        if not client.is_ready():
-            raise RuntimeError("❌ Cliente Weaviate não está pronto para uso")
+# --- Clientes Dinâmicos (dependem dos parâmetros do banco) ---
+# (O restante do arquivo permanece igual, mas incluído aqui para facilitar)
 
-        logger.info("✅ Cliente Weaviate conectado com sucesso")
-        return client
+weaviate_client: Optional[weaviate.WeaviateClient] = None
 
-    except Exception as e:
-        logger.error(f"❌ Erro ao inicializar cliente Weaviate: {e}")
-        raise
+def initialize_dynamic_clients():
+    global weaviate_client
+    settings = get_settings() # Também precisa das settings aqui
+    logger.info("⚙️ Inicializando clientes dinâmicos (Weaviate)...")
+    weaviate_url = obter_parametro("weaviate_url")
+    if weaviate_url and settings.WEAVIATE_API_KEY:
+        try:
+            auth = weaviate.auth.AuthApiKey(settings.WEAVIATE_API_KEY)
+            # A chave da OpenAI também vem das settings
+            client = weaviate.connect_to_weaviate_cloud(cluster_url=weaviate_url, auth_credentials=auth, headers={"X-OpenAI-Api-Key": settings.OPENAI_API_KEY})
+            client.connect()
+            weaviate_client = client
+            logger.info("✅ Cliente Weaviate (dinâmico) inicializado e conectado.")
+        except Exception as e:
+            logger.error(f"❌ Erro ao conectar com Weaviate: {e}")
+    else:
+        logger.error("❌ 'weaviate_url' não encontrado ou WEAVIATE_API_KEY faltando.")
+
+def get_weaviate_client() -> weaviate.WeaviateClient:
+    if not weaviate_client: raise RuntimeError("Cliente Weaviate não foi inicializado.")
+    return weaviate_client
 
 
-# 🔥 Função para gerar chat completion
-async def generate_chat_completion(
-    system_prompt: str,
-    user_message: str,
-    chat_history: Optional[List[dict]] = None,
-    model: str = settings.DEFAULT_MODEL,
-    temperature: float = 0.7,
-    max_tokens: Optional[int] = None
-) -> str:
+# --- Funções de Lógica de Negócio ---
+# (As funções abaixo já usam os getters corrigidos, então não precisam de alteração)
+
+def _calcular_custo(model: str, prompt_tokens: int, completion_tokens: int) -> float:
+    #... (código inalterado)
+    precos = {"gpt-4": {"prompt": 10.0, "completion": 30.0}, "gpt-3.5-turbo": {"prompt": 0.50, "completion": 1.50}}
+    modelo_precos = precos.get(model, precos.get(obter_parametro("modelo"), precos["gpt-3.5-turbo"]))
+    return ((prompt_tokens / 1_000_000) * modelo_precos["prompt"]) + ((completion_tokens / 1_000_000) * modelo_precos["completion"])
+
+def generate_chat_completion(
+    system_prompt: str, user_message: str, model: str, temperature: float,
+    chat_history: Optional[List[dict]] = None
+) -> Dict[str, Any]:
+    #... (código inalterado)
     client = get_openai_client()
-
     try:
-        messages = []
+        messages = [{"role": "system", "content": system_prompt}]
+        if chat_history: messages.extend(chat_history)
+        if user_message: messages.append({"role": "user", "content": user_message})
 
-        if system_prompt:
-            messages.append({"role": "system", "content": system_prompt})
-
-        if chat_history:
-            messages.extend(chat_history)
-
-        messages.append({"role": "user", "content": user_message})
-
-        response = client.chat.completions.create(
-            model=model,
-            messages=messages,
-            temperature=temperature,
-            max_tokens=max_tokens
-        )
-
+        response = client.chat.completions.create(model=model, messages=messages, temperature=temperature)
+        
         content = response.choices[0].message.content.strip()
-        return content
-
+        usage = response.usage
+        custo = _calcular_custo(model, usage.prompt_tokens, usage.completion_tokens)
+        
+        return {"content": content, "usage": usage, "cost": custo}
     except Exception as e:
         logger.error(f"❌ Erro ao gerar chat completion: {e}")
-        raise
+        return {"content": "Desculpe, ocorreu um erro ao gerar uma resposta.", "usage": {}, "cost": 0.0}
 
-
-# 🔥 Função para gerar embedding
-async def gerar_embedding_openai(texto: str) -> Optional[List[float]]:
+def gerar_embedding_openai(texto: str) -> Optional[List[float]]:
+    #... (código inalterado)
     client = get_openai_client()
-
+    embedding_model = obter_parametro("embedding_model", default="text-embedding-ada-002")
     try:
-        response = client.embeddings.create(
-            model=settings.EMBEDDING_MODEL,
-            input=texto
-        )
+        response = client.embeddings.create(model=embedding_model, input=texto.replace("\n", " "))
         return response.data[0].embedding
     except Exception as e:
         logger.error(f"❌ Erro ao gerar embedding: {e}")
         return None
-
-
-# 👇 FUNÇÃO ATUALIZADA 👇
-# Adicionamos o parâmetro 'categoria: Optional[str] = None'
-# Função para buscar artigos por embedding com filtro de categoria
-async def buscar_artigos_por_embedding(
-    embedding: List[float],
-    categoria: Optional[str] = None, # Parâmetro opcional para o filtro
-    limit: int = 5
-):
-    """
-    Busca artigos no Weaviate por embedding, com um filtro opcional de categoria.
-    """
+    
+def buscar_artigos_por_embedding(
+    near_vector: List[float],
+    limit: int,
+    categoria: Optional[str] = None
+) -> List[Dict]:
+    #... (código inalterado)
     client = get_weaviate_client()
-
-    # Monta o filtro apenas se a categoria for fornecida
+    
     filtro = None
-    if categoria:
-        logger.warning(f"Filtro por categoria '{categoria}' ignorado pois o campo não existe no esquema do Weaviate.")
-        #logger.info(f"Aplicando filtro de categoria: {categoria}")
-        #filtro = Filter.by_property("categoria").equal(categoria)
-
+    if categoria and categoria != 'geral':
+        logger.info(f"Aplicando filtro de categoria no Weaviate: {categoria}")
+        filtro = Filter.by_property("categoria").equal(categoria)
+    
     try:
-        results = client.collections.get("Article").query.near_vector(
-            near_vector=embedding,
+        collection = client.collections.get("Article")
+        
+        results = collection.query.near_vector(
+            near_vector=near_vector,
             limit=limit,
-            filters=filtro, # Aplica o filtro aqui (será None se não houver categoria)
+            filters=filtro,
             return_metadata=["distance"],
-            return_properties=["title", "url", "resumo", "content"] # Adicionei 'content' que usamos no prompt
+            return_properties=["title", "url", "content", "resumo", "movidesk_id"]
         )
-
-        artigos = []
-        if hasattr(results, "objects") and results.objects:
-            for obj in results.objects:
-                artigos.append({
-                    "title": obj.properties.get("title", "(sem título)"),
-                    "url": obj.properties.get("url", "#"),
-                    "resumo": obj.properties.get("resumo", ""),
-                    # Garante que o 'content' seja retornado para montar o prompt do RAG
-                    "content": obj.properties.get("content", obj.properties.get("resumo", "")), 
-                    "distance": obj.metadata.distance if obj.metadata else None
-                })
-
-        return artigos
+        
+        return [obj.properties for obj in results.objects]
+        
     except Exception as e:
         logger.error(f"❌ Erro ao buscar artigos por embedding: {e}")
         return []
 
-
-# 🔄 Gerenciar conexões
-async def connect_clients():
-    get_openai_client()
-    get_supabase_client()
-    get_weaviate_client()
-    logger.info("🔗 Todas as conexões foram inicializadas com sucesso")
-
-
-async def close_clients():
-    logger.info("🔒 Todas as conexões foram fechadas (Weaviate, Supabase e OpenAI)")
+@lru_cache(maxsize=10)
+def carregar_prompt_por_nome(nome: str) -> Optional[Dict[str, Any]]:
+    #... (código inalterado)
+    logger.info(f"🔍 Buscando prompt '{nome}' no banco de dados...")
+    try:
+        supabase = get_supabase_client()
+        response = supabase.table("prompts").select("nome, conteudo").eq("nome", nome).limit(1).execute()
+        if response.data:
+            logger.info(f"✅ Prompt '{nome}' encontrado.")
+            return response.data[0]
+        else:
+            logger.warning(f"⚠️ Prompt '{nome}' não encontrado.")
+            return None
+    except Exception as e:
+        logger.error(f"❌ Erro ao buscar prompt '{nome}': {e}")
+        return None

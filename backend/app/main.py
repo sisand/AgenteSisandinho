@@ -1,102 +1,94 @@
+# app/main.py
+
 import logging
+from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+# from dotenv import load_dotenv # REMOVER ESTA LINHA
+import os
 from datetime import datetime
-from dotenv import load_dotenv
 
-# Chame esta função AQUI, o mais cedo possível, antes de qualquer outra importação
-# do seu próprio projeto que possa depender de variáveis de ambiente.
-load_dotenv()
+# Importa as configurações do Pydantic-settings (que já carrega o .env)
+from app.core.config import get_settings # Adicionar esta importação
 
-# Agora, o resto das suas importações e a configuração do app
-from app.core.clients import get_supabase_client
-from app.core.config import settings
+# Importa os módulos da aplicação
+from app.core.clients import get_supabase_client, initialize_dynamic_clients
+from app.core.dynamic_config import carregar_parametros_do_banco, obter_parametro
 from app.routers import api_router
-# 🔥 Setup de logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("app.main")
 
 
-# 🔧 Log das configurações carregadas
-logger.info("Configurações importadas de config.py:")
-logger.info(f"SUPABASE_URL: {settings.SUPABASE_URL}")
-logger.info(f"Ambiente: {settings.ENVIRONMENT}")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # --- Código que roda na inicialização ---
+        
+    # 1. Cria o cliente essencial (Supabase)
+    supabase = get_supabase_client()
+    
+    # 2. Carrega os parâmetros do banco (agora de forma síncrona)
+    carregar_parametros_do_banco(supabase)
+
+   
+
+    # 3. Com os parâmetros em memória, configura o logging dinamicamente
+    log_level_str = obter_parametro("log_level", "INFO").upper()
+    #log_level_str = "DEBUG"
+
+    #log_level_from_db = obter_parametro("log_level", "INFO").upper()
+    #print(f"--- ATENÇÃO: Nível de log forçado para DEBUG (valor no banco: {log_level_from_db}) ---") 
+
+    logging.basicConfig(
+        level=log_level_str,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        force=True
+    )
+    # --- ADICIONE ESTA LINHA ---
+    # Define que o logger específico da biblioteca 'httpx' só deve mostrar logs
+    # a partir do nível WARNING, ignorando os de INFO e DEBUG.
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logger = logging.getLogger(__name__)
+    
+    logger.info("🚀 Iniciando sequência de startup da aplicação...")
+    logger.info(f"Nível de log configurado para: {log_level_str}")
+
+    # 4. Inicializa os outros clientes que dependem dos parâmetros
+    initialize_dynamic_clients()
+    
+    logger.info("✅ Aplicação iniciada e pronta para receber requisições!")
+    
+    yield # A aplicação fica rodando aqui
+    
+    # --- Código que roda no encerramento ---
+    logger.info("🔌 Encerrando a aplicação...")
 
 
-# 🚀 Criando a aplicação FastAPI
+# Cria a aplicação FastAPI, registrando o lifespan
 app = FastAPI(
     title="AgenteIA API",
-    description="API do assistente virtual Sisandinho, utilizando IA + RAG + OpenAI + Weaviate + Supabase.",
-    version="1.0.0"
+    description="API do assistente virtual Sisandinho...",
+    version="1.0.0",
+    lifespan=lifespan
 )
 
-
-# 🌐 Configurando CORS
+# Configurando CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # 🔥 Em produção, restrinja para ["https://seusite.com"]
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-
-# 🔗 Registrando todos os routers centralizados no __init__.py dos routers
+# Registrando todos os routers
 app.include_router(api_router)
 
 
-# ✅ Health Check
+# Endpoint de Health Check
 @app.get("/api/health")
 async def health_check():
-    """
-    ✅ Verifica se o servidor está funcionando e se os serviços externos estão conectados.
-    """
-    health_info = {
-        "status": "healthy",
-        "timestamp": datetime.now().isoformat(),
-        "services": {}
-    }
-
-    # 🔍 Supabase
-    try:
-        supabase = get_supabase_client()
-        if supabase:
-            health_info["services"]["supabase"] = "connected"
-        else:
-            health_info["services"]["supabase"] = "not initialized"
-            health_info["status"] = "degraded"
-    except Exception as e:
-        health_info["services"]["supabase"] = f"error: {str(e)}"
-        health_info["status"] = "degraded"
-
-    # 🔍 OpenAI
-    import os
-    if os.getenv("OPENAI_API_KEY"):
-        health_info["services"]["openai"] = "key configured"
-    else:
-        health_info["services"]["openai"] = "key missing"
-        health_info["status"] = "degraded"
-
-    return health_info
+    return {"status": "healthy", "timestamp": datetime.now().isoformat()}
 
 
-# 🔧 Diagnóstico de Rotas
-@app.get("/api/debug/routes", include_in_schema=False)
-async def list_all_routes():
-    """🔧 Lista todas as rotas registradas na aplicação."""
-    routes = []
-    for route in app.routes:
-        if hasattr(route, "path") and hasattr(route, "methods"):
-            routes.append({
-                "path": route.path,
-                "methods": list(route.methods),
-                "name": route.name if hasattr(route, "name") else None
-            })
-    logger.info(f"Total de rotas registradas: {len(routes)}")
-    return {"total_routes": len(routes), "routes": routes}
-
-
-# 🏠 Endpoint raiz
+# Endpoint raiz
 @app.get("/api")
 def read_root():
     return {"message": "🚀 API do AgenteIA está funcionando perfeitamente"}

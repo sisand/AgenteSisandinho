@@ -1,287 +1,157 @@
+# app/services/fluxo_chat.py
+"""
+Serviço principal que orquestra o fluxo de processamento de uma pergunta do usuário.
+"""
 import logging
 import time
-from typing import Optional, List, Dict
+from typing import List, Dict, Any, Optional
+from datetime import datetime
 
+from app.models.api import RespostaChat
+from app.core.clients import (
+    generate_chat_completion, 
+    gerar_embedding_openai, 
+    buscar_artigos_por_embedding
+)
+from app.core.dynamic_config import obter_parametro
 from app.services.classificador import classificar_pergunta
-from app.services.gerador_resposta import gerar_resposta
-from app.core.clients import get_supabase_client
-from app.core.clients import generate_chat_completion, gerar_embedding_openai, buscar_artigos_por_embedding
-
-
+from app.services.sessoes import obter_ou_criar_sessao, obter_detalhes_sessao
+from app.services.mensagens import salvar_mensagem
+from app.services.prompts import buscar_prompt_por_nome
 
 logger = logging.getLogger(__name__)
 
-# 🔥 Histórico em memória (substituir futuramente por Redis, banco, etc.)
-_historico_conversas: Dict[str, List[Dict[str, str]]] = {}
 
-# 🔸 Adiciona mensagem no histórico
-def adicionar_ao_historico(usuario_id: int, mensagem: str, eh_usuario: bool = True):
+async def buscar_artigos_weaviate(pergunta: str, categoria: Optional[str]) -> list:
     """
-    Adiciona uma mensagem ao histórico local.
-
-    Args:
-        usuario_id (int): ID do usuário.
-        mensagem (str): Conteúdo da mensagem.
-        eh_usuario (bool): True se for do usuário, False se for da IA.
+    Orquestra a busca de artigos no Weaviate (RAG).
+    
+    ATENÇÃO: Atualmente, a busca é feita sem filtro de categoria para garantir
+    maior chance de encontrar resultados enquanto a base não está bem categorizada.
+    A categoria recebida é ignorada para a busca, mas ainda pode ser usada para logs.
     """
-    if not usuario_id:
-        return
-
-    if usuario_id not in _historico_conversas:
-        _historico_conversas[usuario_id] = []
-
-    _historico_conversas[usuario_id].append({
-        "role": "user" if eh_usuario else "assistant",
-        "content": mensagem
-    })
-
-    if len(_historico_conversas[usuario_id]) > 20:
-        _historico_conversas[usuario_id] = _historico_conversas[usuario_id][-20:]
-
-
-# 🔸 Recupera o histórico do usuário
-def obter_historico_usuario(usuario_id: int, max_mensagens: int = 3) -> str:
-    """
-    Retorna até N mensagens anteriores do usuário no formato texto.
-
-    Args:
-        usuario_id (int): ID do usuário.
-        max_mensagens (int): Quantidade máxima de mensagens.
-
-    Returns:
-        str: Histórico concatenado.
-    """
-    if not usuario_id or usuario_id not in _historico_conversas:
-        logger.info(f"📜 Sem histórico para o usuário {usuario_id}")
-        return ""
-
-    mensagens = _historico_conversas[usuario_id]
-    perguntas = [
-        m["content"] for m in reversed(mensagens)
-        if m["role"] == "user"
-    ][:max_mensagens]
-
-    if not perguntas:
-        logger.info(f"📜 Nenhuma pergunta relevante no histórico")
-        return ""
-
-    perguntas.reverse()
-    historico = "\n".join(f"Usuário: {p}" for p in perguntas)
-    logger.info(f"📜 Histórico recuperado: {historico}")
-    return historico
-
-
-# 🔸 Salva a interação no Supabase
-async def salvar_interacao(
-    usuario_id: Optional[int],
-    pergunta: str,
-    resposta: str,
-    categoria: str = "geral"
-):
-    """
-    Salva pergunta, resposta e categoria no Supabase.
-
-    Args:
-        usuario_id (Optional[int]): ID do usuário.
-        pergunta (str): Pergunta feita.
-        resposta (str): Resposta gerada.
-        categoria (str): Classificação da pergunta.
-    """
-    try:
-        client = get_supabase_client()
-
-        data = {
-            "usuario_id": usuario_id,
-            "pergunta": pergunta,
-            "resposta": resposta,
-            "categoria": categoria
-        }
-
-        response = client.table("mensagens").insert(data).execute()
-
-        if response.data:
-            logger.info(f"✅ Interação salva no Supabase para usuário {usuario_id}")
-        else:
-            logger.warning(f"⚠️ Nenhum dado salvo no Supabase. Resposta: {response}")
-    except Exception as e:
-        logger.error(f"❌ Erro ao salvar interação no Supabase: {e}")
-
-
-# Cole esta função no lugar da sua 'processar_pergunta' atual em app/services/fluxo_chat.py
-
-# 🔥 Pipeline principal
-async def processar_pergunta(usuario_id: Optional[int], pergunta: str) -> Dict:
-    """
-    Pipeline principal que processa a pergunta (Versão Nível 1 - Especialista Confiável):
-    - Classifica a intenção.
-    - Decide se precisa de RAG ou não.
-    - Gera resposta formatada e com fontes.
-    - Salva no histórico e Supabase.
-    """
-    inicio = time.time()
-    logger.info(f"🧠 Pergunta recebida: {pergunta}")
-
-    adicionar_ao_historico(usuario_id, pergunta, eh_usuario=True)
-
-    # 1️⃣ Classifica categoria
-    categoria = await classificar_pergunta(pergunta)
-    logger.info(f"📚 Classificação da pergunta: {categoria}")
-
-    # 2️⃣ Decide se precisa de RAG
-    precisa_rag = await classificar_precisa_rag(pergunta)
-    logger.info(f"🔍 Precisa usar RAG? {precisa_rag}")
-
-    artigos_encontrados = []
-    resposta = ""
-
-    # 3️⃣ Gera resposta com ou sem RAG
-    if precisa_rag:
-        logger.info("🚀 Buscando artigos no Weaviate...")
-        artigos_encontrados = await buscar_artigos_weaviate(pergunta, categoria=categoria)
-        logger.info(f"✅ {len(artigos_encontrados)} artigos encontrados.")
-
-        # Lógica de RAG aprimorada
-        if artigos_encontrados:
-            # Monta o contexto para o LLM
-            contexto = "\n\n---\n\n".join(
-                [f"Título: {a['title']}\nURL: {a['url']}\nConteúdo: {a['content']}" for a in artigos_encontrados]
-            )
-
-            # Prepara os títulos para a citação de fontes
-            titulos_fontes = "\n".join([f"* {a['title']}" for a in artigos_encontrados])
-
-            # === MELHORIA NÍVEL 1: PROMPT DO SISTEMA ===
-            # PROMPT FINAL E REFINADO
-            system_prompt = """
-            Você é um assistente especialista no ERP Vision, amigável e extremamente didático. Sua missão é fornecer respostas claras e precisas baseadas exclusivamente nos artigos da base de conhecimento fornecidos.
-
-            **Instruções de Resposta:**
-            1.  Analise a pergunta do usuário e o contexto dos artigos fornecidos.
-            2.  Formule uma resposta direta e útil. Se a pergunta for sobre "como fazer", crie um passo a passo. Se for sobre "o que é", crie uma explicação concisa.
-            3.  Use **Markdown** para formatar a resposta (use **negrito** para destacar menus, botões e conceitos importantes) para máxima clareza.
-            4.  **IMPORTANTE: Não inclua os títulos dos artigos ou links no corpo da sua resposta principal.** A interface do usuário cuidará de exibir as fontes separadamente. A sua resposta deve ser um texto limpo, coeso e autônomo.
-            5.  **NUNCA** invente informações. Se a resposta não estiver no contexto, informe que não encontrou a informação nos artigos.
-            6.  Encerre de forma amigável, incentivando o usuário a fazer mais perguntas caso a dúvida não tenha sido totalmente esclarecida.
-            """
-
-            # === MELHORIA NÍVEL 1: MENSAGEM DO USUÁRIO ===
-            # user_message ATUALIZADA (opcional, mas recomendado)
-            user_message = f"""
-            **Artigos da Base de Conhecimento (Contexto):**
-            ---
-            {contexto}
-            ---
-
-            **Pergunta do Usuário:**
-            "{pergunta}"
-            """
-
-            resposta = await generate_chat_completion(
-                system_prompt=system_prompt,
-                user_message=user_message,
-                temperature=0.2,  # Baixamos a temperatura para respostas mais factuais
-                max_tokens=1024   # Aumentamos um pouco para acomodar a formatação
-            )
-        else:
-            # Se o RAG foi acionado mas não encontrou artigos, caia para a resposta padrão
-            logger.warning("⚠️ RAG solicitado, mas nenhum artigo encontrado. Usando resposta padrão.")
-            precisa_rag = False # Força a entrada no bloco 'else' abaixo
-
-    if not precisa_rag: # Ativado se o RAG não for necessário ou se falhou em encontrar artigos
-        logger.info("💬 Respondendo sem RAG (conhecimento geral)...")
-        system_prompt = "Você é um assistente amigável e prestativo especializado no ERP Vision. Responda à pergunta do usuário de forma clara e objetiva com base no seu conhecimento geral."
-        user_message = pergunta
-
-        resposta = await generate_chat_completion(
-            system_prompt=system_prompt,
-            user_message=user_message,
-            temperature=0.7,
-            max_tokens=800
-        )
-
-    # 4️⃣ Adiciona resposta ao histórico e salva interação
-    adicionar_ao_historico(usuario_id, resposta, eh_usuario=False)
-    await salvar_interacao(usuario_id, pergunta, resposta, categoria)
-
-    tempo = round(time.time() - inicio, 2)
-
-    # 5️⃣ Prepara retorno
-    return {
-        "resposta": resposta,
-        "categoria": categoria,
-        "artigos": artigos_encontrados,
-        "tempo_processamento": tempo,
-        "prompt_usado": "Prompt Nível 1 - Especialista Confiável" # Atualiza o nome do prompt
-    }
+    logger.info(f"Iniciando busca RAG para a pergunta: '{pergunta}' (Categoria classificada: '{categoria}' - não utilizada no filtro)")
+    embedding = gerar_embedding_openai(pergunta)
+    if embedding is None: 
+        logger.warning("Não foi possível gerar o embedding da pergunta.")
+        return []
+    
+    limite_rag = obter_parametro("rag_search_limit", default=3)
+    
+    # --- ALTERAÇÃO: A busca é sempre feita sem filtro de categoria ---
+    artigos_encontrados = buscar_artigos_por_embedding(
+        near_vector=embedding, categoria=None, limit=limite_rag
+    )
+        
+    return artigos_encontrados
 
 
 async def classificar_precisa_rag(pergunta: str) -> bool:
+    """Classifica se a pergunta do usuário necessita de busca na base de conhecimento (RAG)."""
+    prompt_nome = obter_parametro("prompt_rag_classificador", default="classificador_rag")
+    prompt_obj = buscar_prompt_por_nome(prompt_nome)
+    if not prompt_obj:
+        logger.error(f"Prompt '{prompt_nome}' não encontrado.")
+        return "?" in pergunta
+    prompt_formatado = prompt_obj['conteudo'].format(pergunta=pergunta)
+    resposta_llm_obj = generate_chat_completion(
+        system_prompt=prompt_formatado, user_message="", 
+        model=obter_parametro("modelo_classificacao", default="gpt-3.5-turbo"), 
+        temperature=0.0
+    )
+    return "SIM" in resposta_llm_obj.get("content", "").strip().upper()
+
+
+async def processar_pergunta(
+    pergunta: str, 
+    id_usuario: int
+) -> RespostaChat:
     """
-    Classifica se a pergunta precisa ou não de busca RAG (Weaviate).
-    Retorna True (precisa RAG) ou False (não precisa).
+    Pipeline principal que processa a pergunta do usuário.
     """
+    inicio = time.time()
+    logger.info(f"🧠 Pergunta recebida para Usuário ID {id_usuario}: '{pergunta}'")
 
-    system_prompt = "Você é um classificador. Para cada pergunta, responda apenas com SIM ou NÃO, conforme a necessidade de consultar artigos no RAG (Weaviate)."
+    id_sessao = obter_ou_criar_sessao(usuario_id=id_usuario)
+    logger.info(f"Chat utilizando Sessão ID: {id_sessao} para Usuário ID: {id_usuario}")
 
-    user_prompt = f"""
-    Critérios:
-    - Se a pergunta envolve informações dinâmicas, procedimentos detalhados, atualizações recentes ou dúvidas comuns de suporte → SIM.
-    - Se a pergunta é genérica, social ou um processo padrão bem conhecido → NÃO.
+    detalhes_sessao = obter_detalhes_sessao(id_sessao)
+    data_inicio_sessao_str = "N/A"
+    hora_inicio_sessao_str = "N/A"
+    if detalhes_sessao and 'criado_em' in detalhes_sessao:
+        try:
+            data_criacao_dt = datetime.fromisoformat(detalhes_sessao['criado_em'])
+            data_inicio_sessao_str = data_criacao_dt.strftime("%d/%m/%Y")
+            hora_inicio_sessao_str = data_criacao_dt.strftime("%H:%M:%S")
+        except (ValueError, TypeError):
+            logger.warning(f"Não foi possível formatar a data de criação da sessão {id_sessao}.")
 
-    Exemplos:
-    1. "Como lançar uma nota fiscal?" → NÃO
-    2. "Como configurar o envio de XML para a contabilidade?" → SIM
-    3. "Boa tarde, tudo bem?" → NÃO
-    4. "Onde encontro os relatórios de comissão?" → SIM
-    5. "Qual o telefone do suporte?" → NÃO
-
-    Pergunta: "{pergunta}"
-    Responda apenas SIM ou NÃO.
-    """
-
-    resposta = await generate_chat_completion(
-        system_prompt=system_prompt,
-        user_message=user_prompt,
-        temperature=0,
-        max_tokens=5
+    id_mensagem_pergunta = salvar_mensagem(
+        pergunta=pergunta, resposta="", usuario_id=id_usuario, sessao_id=id_sessao,
+        tipo_resposta="usuario", rag_utilizado=False, custo_total=0.0,
+        tokens_prompt=0, tokens_completion=0, tempo_processamento=0.0
     )
 
-    # Normaliza e interpreta
-    resposta_limpa = resposta.strip().upper()
+    categoria = await classificar_pergunta(pergunta)
+    precisa_rag = await classificar_precisa_rag(pergunta)
+    logger.info(f"📚 Categoria: '{categoria}' | Precisa de RAG: {precisa_rag}")
 
-    if "SIM" in resposta_limpa:
-        return True
-    elif "NÃO" in resposta_limpa or "NAO" in resposta_limpa:
-        return False
-    else:
-        # fallback defensivo → se a IA não responder certo, assume que não precisa RAG
-        return False
+    artigos_encontrados = []
+    dados_llm = {}
+    nome_prompt_usado = "desconhecido"
+    resposta_final = "Desculpe, não consegui gerar uma resposta no momento."
 
+    if precisa_rag:
+        artigos_encontrados = await buscar_artigos_weaviate(pergunta, categoria)
+        if artigos_encontrados:
+            contexto = "\n\n---\n\n".join([f"Título: {a.get('title', '')}\nConteúdo: {a.get('content', '')}" for a in artigos_encontrados])
+            nome_prompt = obter_parametro("prompt_chat_padrao", default="chat_padrao")
+            nome_prompt_usado = nome_prompt
+            prompt_obj = buscar_prompt_por_nome(nome_prompt)
+            system_prompt = prompt_obj['conteudo'].format(historico_texto="", context=contexto, question=pergunta) if prompt_obj else "Responda de forma útil com base nas informações fornecidas."
+            dados_llm = generate_chat_completion(
+                system_prompt=system_prompt,
+                user_message=pergunta,
+                model=obter_parametro("modelo", default="gpt-4o"),
+                temperature=float(obter_parametro("temperatura", default=0.7))
+            )
+            resposta_final = dados_llm.get("content", resposta_final)
+        else:
+            logger.warning("⚠️ RAG solicitado, mas nenhum artigo foi encontrado (mesmo após busca geral). Utilizando prompt sem contexto.")
+            precisa_rag = False
 
-# 👇 ESTA É A VERSÃO FINAL DA FUNÇÃO QUE ORQUESTRA TUDO 👇
-# (Substitua a versão anterior que criamos)
-async def buscar_artigos_weaviate(pergunta: str, categoria: str, limite: int = 3) -> list:
-    """
-    Orquestra a busca de artigos:
-    1. Gera o embedding da pergunta.
-    2. Busca os artigos no Weaviate usando o embedding e o filtro de categoria.
-    """
-    logger.info(f"Iniciando busca RAG para a pergunta: '{pergunta}'")
-    
-    # Passo 1: Gerar o embedding para a pergunta do usuário
-    embedding = await gerar_embedding_openai(pergunta)
-    
-    # Verifica se a geração do embedding falhou
-    if embedding is None:
-        logger.warning("Não foi possível gerar o embedding da pergunta. Abortando busca RAG.")
-        return []
+    if not precisa_rag:
+        nome_prompt = obter_parametro("prompt_chat_geral", default="chat_geral")
+        nome_prompt_usado = nome_prompt
+        prompt_obj = buscar_prompt_por_nome(nome_prompt)
+        system_prompt = prompt_obj['conteudo'].format(pergunta=pergunta) if prompt_obj else "Você é um assistente prestativo."
+        dados_llm = generate_chat_completion(
+            system_prompt=system_prompt,
+            user_message=pergunta,
+            model=obter_parametro("modelo", default="gpt-4o"),
+            temperature=float(obter_parametro("temperatura", default=0.7))
+        )
+        resposta_final = dados_llm.get("content", resposta_final)
 
-    # Passo 2: Buscar artigos no Weaviate usando o embedding e a categoria
-    logger.info("Buscando artigos no Weaviate com o embedding gerado...")
-    artigos_encontrados = await buscar_artigos_por_embedding(
-        embedding=embedding,
+    tempo_total = round(time.time() - inicio, 2)
+    usage = dados_llm.get("usage")
+
+    salvar_mensagem(
+        id_da_mensagem_a_atualizar=id_mensagem_pergunta, pergunta=pergunta,
+        resposta=resposta_final, usuario_id=id_usuario, sessao_id=id_sessao,
+        prompt_usado=nome_prompt_usado, classificacao=categoria, tipo_resposta="ia",
+        custo_total=dados_llm.get("cost", 0.0), tokens_prompt=usage.prompt_tokens if usage else 0,
+        tokens_completion=usage.completion_tokens if usage else 0, artigos_fonte=artigos_encontrados,
+        tempo_processamento=tempo_total
+    )
+
+    return RespostaChat(
+        id_sessao=id_sessao,
+        data_inicio_sessao=data_inicio_sessao_str,
+        hora_inicio_sessao=hora_inicio_sessao_str,
+        resposta=resposta_final,
         categoria=categoria,
-        limit=limite
+        artigos=artigos_encontrados,
+        tempo_processamento=tempo_total,
+        prompt_usado=nome_prompt_usado
     )
-    
-    return artigos_encontrados
