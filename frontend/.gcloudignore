@@ -1,0 +1,5 @@
+.DS_Store
+.streamlit/secrets.toml  # Não subir o ficheiro de segredos local!
+venv/
+__pycache__/
+*.pyc

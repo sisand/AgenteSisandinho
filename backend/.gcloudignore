@@ -1,0 +1,8 @@
+.DS_Store
+.env
+venv/
+__pycache__/
+*.pyc
+# --- ADIÇÃO IMPORTANTE AQUI ---
+# Ignora a pasta que contém os modelos de ML descarregados
+modelos/
