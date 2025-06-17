@@ -7,7 +7,7 @@ resposta utilizadas pelos endpoints da API, promovendo consistência e facilitan
 """
 
 from pydantic import BaseModel, Field
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Literal
 from datetime import datetime
 
 
@@ -44,6 +44,7 @@ class RequisicaoChat(BaseModel):
 
 class RespostaChat(BaseModel):
     """Define a estrutura da resposta que a API retornará para o endpoint de chat."""
+    id_mensagem: int = Field(..., description="O ID único da mensagem de resposta da IA.")
     id_sessao: int = Field(..., description="O ID da sessão de chat atual.")
     data_inicio_sessao: str = Field(..., description="Data de início da sessão no formato DD/MM/AAAA.")
     hora_inicio_sessao: str = Field(..., description="Hora de início da sessão no formato HH:MM:SS.")
@@ -77,7 +78,6 @@ class RequisicaoPrompt(BaseModel):
     conteudo: str = Field(..., description="O texto completo do prompt de sistema.")
 
 
-
 # ==============================================================================
 # Modelos para os Endpoints de Sessão (Ex: /sessoes/*)
 # ==============================================================================
@@ -106,3 +106,10 @@ class RespostaInfoSessao(BaseModel):
                 "hora_inicio": "10:30:00"
             }
         }
+# ==============================================================================
+# Modelos para os Endpoints de Feedback (/feedbacks)
+# ==============================================================================
+
+class RequisicaoFeedback(BaseModel):
+    id_mensagem: int = Field(..., description="O ID da mensagem que está sendo avaliada.")
+    tipo_feedback: Literal["positivo", "negativo"] = Field(..., description="O tipo de feedback: 'positivo' ou 'negativo'.")

@@ -1,4 +1,6 @@
 # app/core/security.py
+# gerar o token em:  uuidgenerator.net ou python -c "import secrets; print(secrets.token_hex(32))"
+
 """
 Módulo de segurança para a API, incluindo a validação de chaves.
 """

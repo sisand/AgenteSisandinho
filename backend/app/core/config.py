@@ -22,7 +22,7 @@ class Settings(BaseSettings):
 
     class Config:
         # O nome do seu ficheiro de ambiente (ex: .env)
-        env_file = ".env"
+        env_file = "backend/.env"
         env_file_encoding = "utf-8"
 
 @lru_cache()

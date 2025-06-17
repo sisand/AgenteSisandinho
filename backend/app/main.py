@@ -27,9 +27,7 @@ async def lifespan(app: FastAPI):
     # 2. Carrega os parâmetros do banco (agora de forma síncrona)
     carregar_parametros_do_banco(supabase)
 
-   
-
-    # 3. Com os parâmetros em memória, configura o logging dinamicamente
+       # 3. Com os parâmetros em memória, configura o logging dinamicamente
     log_level_str = obter_parametro("log_level", "INFO").upper()
     #log_level_str = "DEBUG"
 

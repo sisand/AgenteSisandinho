@@ -6,19 +6,24 @@ import os
 import requests
 import streamlit_authenticator as stauth
 import copy 
+import plotly.express as px # Import para gráficos
+from datetime import date, timedelta
 
 from services.api_client import (
     enviar_pergunta,
     carregar_feedbacks,
-    carregar_parametros,
-    carregar_historico,
-    buscar_tickets,
-    salvar_curadoria,
+    carregar_metricas,
+    enviar_feedback,
     listar_artigos,
     importar_artigos,
-    atualizar_prompt, # Corrigido para usar a função de atualização
+    atualizar_prompt,
     carregar_prompts,
-    api_carregar_sessoes,
+    # Removido para evitar confusão, já que não estamos usando todas as funções
+    # carregar_parametros,
+    # carregar_historico,
+    # buscar_tickets,
+    # salvar_curadoria,
+    # api_carregar_sessoes,
 )
 
 # --- CONFIGURAÇÃO DA PÁGINA ---
@@ -106,16 +111,31 @@ if pagina.startswith("🔍"):
     if "messages" not in st.session_state:
         st.session_state.messages = []
 
-    for message in st.session_state.messages:
+    # --- INÍCIO DA CORREÇÃO: Removido o loop duplicado ---
+    for i, message in enumerate(st.session_state.messages):
         with st.chat_message(message["role"]):
-            if isinstance(message["content"], dict):
-                st.markdown(message["content"].get("resposta", "*Ocorreu um erro ao processar a resposta.*"))
-                if message["content"].get("artigos"):
+            content = message["content"]
+            resposta_texto = content.get("resposta", content) if isinstance(content, dict) else content
+            st.markdown(resposta_texto)
+
+            if message["role"] == "assistant" and isinstance(content, dict):
+                id_mensagem = content.get("id_mensagem")
+                if id_mensagem:
+                    col1, col2, _ = st.columns([1, 1, 8])
+                    with col1:
+                        if st.button("👍", key=f"like_{id_mensagem}"):
+                            enviar_feedback(id_mensagem, "positivo")
+                            st.toast("Obrigado pelo seu feedback!")
+                    with col2:
+                        if st.button("👎", key=f"dislike_{id_mensagem}"):
+                            enviar_feedback(id_mensagem, "negativo")
+                            st.toast("Obrigado! Vamos usar seu feedback para melhorar.")
+                            
+                if content.get("artigos"):
                     with st.expander("📚 Fontes Consultadas"):
-                        for artigo in message["content"]["artigos"]:
+                        for artigo in content["artigos"]:
                             st.markdown(f"📄 [{artigo['title']}]({artigo['url']})")
-            else:
-                st.markdown(message["content"])
+    # --- FIM DA CORREÇÃO ---
 
     if prompt := st.chat_input("Digite sua pergunta sobre o Vision..."):
         st.session_state.messages.append({"role": "user", "content": prompt})
@@ -143,18 +163,21 @@ if pagina.startswith("🔍"):
                     st.session_state['data_inicio_sessao'] = resposta_json.get('data_inicio_sessao')
                     st.session_state['hora_inicio_sessao'] = resposta_json.get('hora_inicio_sessao')
                     precisa_recarregar = True
-
-                st.markdown(resposta_json.get("resposta", "Recebi uma resposta vazia."))
-                if resposta_json.get("artigos"):
-                    with st.expander("📚 Fontes Consultadas", expanded=True):
-                        for artigo in resposta_json["artigos"]:
-                            st.markdown(f"📄 **[{artigo['title']}]({artigo['url']})**")
                 
+                # Adiciona a resposta completa ao histórico ANTES de potencialmente recarregar
                 st.session_state.messages.append({"role": "assistant", "content": resposta_json})
                 
+                # Se for a primeira mensagem, recarrega para mostrar o cabeçalho da sessão
                 if precisa_recarregar:
                     st.rerun()
-
+                
+                # Como a página não será recarregada nas próximas vezes, precisamos
+                # de uma forma de exibir a resposta mais recente. st.rerun() faz isso.
+                # Se não for a primeira mensagem, um simples rerun já resolve.
+                else:
+                    st.rerun()
+                    
+                    
 # 📚 PÁGINA: BASE DE CONHECIMENTO
 elif pagina.startswith("📚"):
     st.subheader("📚 Base de Conhecimento")
@@ -319,26 +342,79 @@ elif pagina.startswith("🗂️"):
                 else:
                     st.warning("Selecione um prompt da lista para poder salvar.")
 
-# 📊 PÁGINA: GESTÃO E MONITORAMENTO
+# --- PÁGINA DE GESTÃO (IMPLEMENTAÇÃO DO DASHBOARD) ---
 elif pagina.startswith("📊"):
     st.subheader("📊 Gestão e Monitoramento")
-    st.markdown("Visualize o histórico de interações e outros dados operacionais.")
     
-    tab_hist, tab_tickets = st.tabs(["💬 Histórico de Perguntas", "🧾 Tickets Movidesk"])
+    st.markdown("#### Filtrar por Período")
+    col1, col2 = st.columns(2)
+    with col1:
+        data_inicio = st.date_input("Data de Início", value=date.today() - timedelta(days=30))
+    with col2:
+        data_fim = st.date_input("Data de Fim", value=date.today())
 
-    with tab_hist:
-        historico = carregar_historico()
-        if historico and isinstance(historico, list):
-            st.dataframe(pd.DataFrame(historico), use_container_width=True)
-        else:
-            st.warning("Nenhum histórico encontrado.")
+    if data_inicio > data_fim:
+        st.error("A data de início não pode ser posterior à data de fim.")
+    else:
+        with st.spinner(f"Carregando métricas de {data_inicio.strftime('%d/%m/%Y')} a {data_fim.strftime('%d/%m/%Y')}..."):
+            metricas = carregar_metricas(data_inicio, data_fim)
 
-    with tab_tickets:
-        tickets = buscar_tickets()
-        if tickets and isinstance(tickets, list):
-            st.dataframe(pd.DataFrame(tickets), use_container_width=True)
+        if "error" in metricas:
+            st.error(f"Não foi possível carregar as métricas: {metricas['error']}")
         else:
-            st.warning("Nenhum ticket encontrado.")
+            st.markdown(f"### Visão Geral do Período")
+            col1, col2, col3 = st.columns(3)
+            col1.metric("Total de Usuários (Geral)", metricas.get("total_usuarios", 0))
+            col2.metric("Sessões no Período", metricas.get("total_sessoes_periodo", 0))
+            col3.metric("Mensagens no Período", metricas.get("total_mensagens_periodo", 0))
+
+            st.markdown("---")
+            st.markdown("### Desempenho e Custos")
+            col1, col2 = st.columns(2)
+            with col1:
+                st.markdown("##### Velocidade (s)")
+                sub_col1, sub_col2, sub_col3 = st.columns(3)
+                sub_col1.metric("Médio", f"{metricas.get('tempo_medio_resposta_s', 0):.2f}")
+                sub_col2.metric("Máximo", f"{metricas.get('tempo_maximo_resposta_s', 0):.2f}")
+                sub_col3.metric("P95", f"{metricas.get('tempo_percentil_95_s', 0):.2f}", help="95% das respostas foram mais rápidas que este valor.")
+            with col2:
+                st.markdown("##### Custos Operacionais (USD)")
+                sub_col1, sub_col2 = st.columns(2)
+                sub_col1.metric("Custo Total", f"$ {metricas.get('custo_total_usd_periodo', 0):.4f}")
+                sub_col2.metric("Custo Médio / Msg", f"$ {metricas.get('custo_medio_por_msg_usd', 0):.6f}")
+
+            st.markdown("---")
+            st.markdown("### Qualidade e Eficácia")
+            col1, col2 = st.columns(2)
+            with col1:
+                st.markdown("##### Qualidade (Feedback)")
+                positivos = metricas.get("feedbacks_positivos_periodo", 0)
+                negativos = metricas.get("feedbacks_negativos_periodo", 0)
+                if (positivos + negativos) > 0:
+                    df_feedback = pd.DataFrame({"Tipo": ["Positivos", "Negativos"], "Quantidade": [positivos, negativos]})
+                    fig = px.pie(df_feedback, values='Quantidade', names='Tipo', color_discrete_map={'Positivos':'#00A86B', 'Negativos':'#FF4B4B'})
+                    st.plotly_chart(fig, use_container_width=True)
+                else:
+                    st.info("Ainda não há feedbacks registrados no período.")
+            with col2:
+                st.markdown("##### Eficácia do RAG")
+                percent_rag = metricas.get("percentual_respostas_com_rag_periodo", 0)
+                st.metric("Respostas com Contexto (RAG)", f"{percent_rag:.2f}%")
+                top_categorias = metricas.get("top_5_categorias_periodo", [])
+                if top_categorias:
+                    st.markdown("###### Top 5 Categorias Buscadas")
+                    df_cat = pd.DataFrame(top_categorias)
+                    st.dataframe(df_cat, use_container_width=True, hide_index=True)
+
+            st.markdown("---")
+            st.markdown("### Engajamento dos Usuários")
+            top_users = metricas.get("top_10_usuarios_periodo", [])
+            if top_users:
+                st.markdown("##### Top 10 Usuários por Nº de Mensagens no Período")
+                df_users = pd.DataFrame(top_users)
+                st.dataframe(df_users, use_container_width=True, hide_index=True)
+            else:
+                st.info("Sem dados de engajamento no período.")
 
 # ⚙️ PÁGINA: CONFIGURAÇÕES
 elif pagina.startswith("⚙️"):
