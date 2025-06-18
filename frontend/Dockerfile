@@ -13,10 +13,6 @@ COPY requirements.txt ./
 # 2. Instala as dependências
 RUN pip install --no-cache-dir -r requirements.txt
 
-# 3. Copia a pasta de configuração do tema para o local correto dentro do contentor
-# Esta é a linha que resolve o problema do modo escuro na GCP.
-COPY .streamlit ./.streamlit
-
 # 4. Agora, copia o resto do código da sua aplicação
 COPY . .
 

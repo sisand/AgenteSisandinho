@@ -1,7 +1,7 @@
 # frontend/requirements.in
 # Lista de dependências diretas para a aplicação Streamlit
 
-streamlit==1.31.1
+streamlit==1.46.0
 streamlit-autorefresh==0.0.1  # Componente específico que você adicionou
 pandas==2.2.1              # Para manipulação de dados e st.dataframe
 requests==2.31.0           # Para o api_client se comunicar com o backend
