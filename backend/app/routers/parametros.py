@@ -1,12 +1,9 @@
-# ==============================================================================
-# ARQUIVO 2 (ALTERADO): app/routers/parametros.py
-# ==============================================================================
 from fastapi import APIRouter, Depends, HTTPException, status
 from typing import Dict, Any
 from pydantic import BaseModel
 
-from app.core.cache import PARAMETROS_CACHE
-from app.services.parametros import atualizar_parametro # <-- Importa o novo serviço
+from app.core.cache import obter_todos_parametros # Usa o nome unificado
+from app.services.parametros import atualizar_parametro # Importa o serviço
 from app.core.security import get_api_key
 
 router = APIRouter()
@@ -17,7 +14,7 @@ class ParametroUpdateRequest(BaseModel):
 @router.get("/")
 def obter_parametros(api_key: str = Depends(get_api_key)) -> Dict[str, Any]:
     """Retorna todos os parâmetros do sistema que estão em cache."""
-    return PARAMETROS_CACHE
+    return obter_todos_parametros()
 
 @router.put("/{nome_parametro}")
 def rota_atualizar_parametro(

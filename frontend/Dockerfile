@@ -1,23 +1,27 @@
+# Dockerfile para Frontend (Streamlit)
+
 # Use uma imagem base oficial e leve do Python
 FROM python:3.10-slim
 
 # Defina o diretório de trabalho dentro do contentor
 WORKDIR /app
 
-# Otimização: Copie apenas o ficheiro de requisitos primeiro
+# --- OTIMIZAÇÃO E CORREÇÃO ---
+# 1. Copia apenas o arquivo de requisitos primeiro para otimizar o cache do Docker
 COPY requirements.txt ./
 
-# Instale as dependências
-# A atualização do pip é uma boa prática
-RUN pip install --upgrade pip && pip install --no-cache-dir -r requirements.txt
+# 2. Instala as dependências
+RUN pip install --no-cache-dir -r requirements.txt
 
-# Agora, copie o resto do código da sua aplicação
+# 3. Copia a pasta de configuração do tema para o local correto dentro do contentor
+# Esta é a linha que resolve o problema do modo escuro na GCP.
+COPY .streamlit ./.streamlit
+
+# 4. Agora, copia o resto do código da sua aplicação
 COPY . .
 
-# Expõe a porta que o Cloud Run irá usar para comunicar com o contentor
-# Embora o comando CMD defina a porta, isto é uma boa prática para documentação.
+# Expõe a porta que o Cloud Run irá usar
 EXPOSE 8080
 
-# Comando para executar a aplicação Streamlit
-# --- CORREÇÃO AQUI: A porta foi alterada para 8080 ---
+# Comando para executar a aplicação Streamlit na porta correta
 CMD ["streamlit", "run", "app.py", "--server.port=8080", "--server.address=0.0.0.0"]

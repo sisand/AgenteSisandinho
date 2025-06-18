@@ -20,11 +20,6 @@ from services.api_client import (
     carregar_prompts,
     carregar_parametros,
     atualizar_parametro
-    # Removido para evitar confusão, já que não estamos usando todas as funções
-    # carregar_historico,
-    # buscar_tickets,
-    # salvar_curadoria,
-    # api_carregar_sessoes,
 )
 
 # --- CONFIGURAÇÃO DA PÁGINA ---
@@ -90,10 +85,20 @@ with st.sidebar:
     authenticator.logout('Logout', 'main', key='unique_logout_key')
     
     st.markdown("## ⚙️ Painel de Controle")
+    
+    # --- ALTERAÇÃO AQUI: Lógica para menus dinâmicos baseados no usuário ---
+    USUARIO_ADMIN = "anderson" 
+    
+    paginas_disponiveis = ["🔍 Chat & IA", "📚 Base de Conhecimento", "🗂️ Curadoria", "📊 Gestão"]
+    if username == USUARIO_ADMIN:
+        paginas_disponiveis.append("⚙️ Configurações")
+        
     pagina = st.radio(
         "Escolha uma seção:",
-        ["🔍 Chat & IA", "📚 Base de Conhecimento", "🗂️ Curadoria", "📊 Gestão", "⚙️ Configurações"]
+        paginas_disponiveis
     )
+    # --- FIM DA ALTERAÇÃO ---
+
     st.markdown("---")
     
     st.info("Versão 1.0 - Sisandinho 🚀")
@@ -120,7 +125,6 @@ if pagina.startswith("🔍"):
             if message["role"] == "assistant" and isinstance(content, dict):
                 id_mensagem = content.get("id_mensagem")
                 
-                # --- CORREÇÃO AQUI: Adicionado 'expanded=True' ---
                 if content.get("artigos"):
                     with st.expander("📚 Fontes Consultadas", expanded=True):
                         for artigo in content["artigos"]:
@@ -134,7 +138,6 @@ if pagina.startswith("🔍"):
                     with col2:
                         if st.button("👎", key=f"dislike_{id_mensagem}"):
                             enviar_feedback(id_mensagem, "negativo"); st.toast("Obrigado! Vamos usar seu feedback para melhorar.")
-    # --- FIM DA CORREÇÃO ---
 
     if prompt := st.chat_input("Digite sua pergunta sobre o Vision..."):
         st.session_state.messages.append({"role": "user", "content": prompt})
@@ -156,27 +159,15 @@ if pagina.startswith("🔍"):
             if "error" in resposta_json:
                 st.error(f"Ocorreu um erro: {resposta_json['error']}")
             else:
-                precisa_recarregar = False
-                if 'id_sessao' not in st.session_state:
+                precisa_recarregar = 'id_sessao' not in st.session_state
+                if precisa_recarregar:
                     st.session_state['id_sessao'] = resposta_json.get('id_sessao')
                     st.session_state['data_inicio_sessao'] = resposta_json.get('data_inicio_sessao')
                     st.session_state['hora_inicio_sessao'] = resposta_json.get('hora_inicio_sessao')
-                    precisa_recarregar = True
                 
-                # Adiciona a resposta completa ao histórico ANTES de potencialmente recarregar
                 st.session_state.messages.append({"role": "assistant", "content": resposta_json})
+                st.rerun()
                 
-                # Se for a primeira mensagem, recarrega para mostrar o cabeçalho da sessão
-                if precisa_recarregar:
-                    st.rerun()
-                
-                # Como a página não será recarregada nas próximas vezes, precisamos
-                # de uma forma de exibir a resposta mais recente. st.rerun() faz isso.
-                # Se não for a primeira mensagem, um simples rerun já resolve.
-                else:
-                    st.rerun()
-                    
-                    
 # 📚 PÁGINA: BASE DE CONHECIMENTO
 elif pagina.startswith("📚"):
     st.subheader("📚 Base de Conhecimento")
@@ -341,7 +332,7 @@ elif pagina.startswith("🗂️"):
                 else:
                     st.warning("Selecione um prompt da lista para poder salvar.")
 
-# --- PÁGINA DE GESTÃO (IMPLEMENTAÇÃO DO DASHBOARD) ---
+# 📊 PÁGINA: GESTÃO (DASHBOARD)
 elif pagina.startswith("📊"):
     st.subheader("📊 Gestão e Monitoramento")
     
@@ -368,8 +359,6 @@ elif pagina.startswith("📊"):
             col3.metric("Mensagens no Período", metricas.get("total_mensagens_periodo", 0))
 
             st.markdown("---")
-
-            # --- GRÁFICO DE EVOLUÇÃO ---
             st.markdown("### Evolução do Desempenho")
             historico = metricas.get("historico_desempenho", [])
             if historico:
@@ -379,7 +368,6 @@ elif pagina.startswith("📊"):
                 st.info("Não há dados suficientes no período para exibir a evolução do desempenho.")
             
             st.markdown("---")
-            # --- NOVA TABELA: ÚLTIMAS INTERAÇÕES ---
             st.markdown("### Análise em Tempo Real (Últimas 10 Interações)")
             ultimas_interacoes = metricas.get("ultimas_interacoes", [])
             if ultimas_interacoes:
@@ -447,31 +435,29 @@ elif pagina.startswith("⚙️"):
     elif parametros:
         st.info("Altere o valor de um parâmetro e clique em 'Salvar' para aplicá-lo em tempo real.")
         
-        for nome, valor in parametros.items():
+        for nome_param, valor in parametros.items():
             st.markdown("---")
             col1, col2, col3 = st.columns([2, 3, 1])
             
             with col1:
-                st.markdown(f"**{nome}**")
+                st.markdown(f"**{nome_param}**")
             
             with col2:
                 novo_valor = st.text_input(
                     label="Valor", 
                     value=str(valor), 
-                    key=f"param_{nome}",
+                    key=f"param_{nome_param}",
                     label_visibility="collapsed"
                 )
             
             with col3:
-                if st.button("Salvar", key=f"btn_param_{nome}", use_container_width=True):
+                if st.button("Salvar", key=f"btn_param_{nome_param}", use_container_width=True):
                     with st.spinner("Salvando..."):
-                        resultado = atualizar_parametro(nome, novo_valor)
+                        resultado = atualizar_parametro(nome_param, novo_valor)
                         if "error" in resultado:
                             st.error(f"Falha: {resultado['error']}")
                         else:
                             st.success("Salvo!")
-                            # Força um recarregamento para mostrar o novo valor, se necessário
-                            # st.rerun() # Descomente se a atualização não for refletida imediatamente
     else:
         st.warning("Nenhum parâmetro encontrado.")
 
