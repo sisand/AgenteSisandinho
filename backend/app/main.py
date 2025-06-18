@@ -1,65 +1,47 @@
 # app/main.py
-
 import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-# from dotenv import load_dotenv # REMOVER ESTA LINHA
-import os
-from datetime import datetime
 
-# Importa as configurações do Pydantic-settings (que já carrega o .env)
-from app.core.config import get_settings # Adicionar esta importação
-
-# Importa os módulos da aplicação
-from app.core.clients import get_supabase_client, initialize_dynamic_clients
-from app.core.dynamic_config import carregar_parametros_do_banco, obter_parametro
+# Importa o router principal que agrega todas as outras rotas
 from app.routers import api_router
 
+# --- ALTERAÇÃO AQUI ---
+# Importa apenas do clients e do novo cache
+from app.core.clients import get_supabase_client, initialize_dynamic_clients
+from app.core.cache import carregar_parametros_para_cache, carregar_prompts_para_cache, obter_parametro
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # --- Código que roda na inicialização ---
-        
-    # 1. Cria o cliente essencial (Supabase)
-    supabase = get_supabase_client()
+    """Gerencia o ciclo de vida da aplicação (startup e shutdown)."""
     
-    # 2. Carrega os parâmetros do banco (agora de forma síncrona)
-    carregar_parametros_do_banco(supabase)
-
-       # 3. Com os parâmetros em memória, configura o logging dinamicamente
-    log_level_str = obter_parametro("log_level", "INFO").upper()
-    #log_level_str = "DEBUG"
-
-    #log_level_from_db = obter_parametro("log_level", "INFO").upper()
-    #print(f"--- ATENÇÃO: Nível de log forçado para DEBUG (valor no banco: {log_level_from_db}) ---") 
-
+    # 1. Carrega os parâmetros e prompts para o cache em memória.
+    supabase_client = get_supabase_client()
+    carregar_parametros_para_cache(supabase_client)
+    carregar_prompts_para_cache(supabase_client)
+    
+    # 2. Configura o logging, usando o nível definido nos parâmetros já cacheados.
+    log_level_str = obter_parametro("log_level", default="INFO").upper()
     logging.basicConfig(
         level=log_level_str,
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
         force=True
     )
-    # --- ADICIONE ESTA LINHA ---
-    # Define que o logger específico da biblioteca 'httpx' só deve mostrar logs
-    # a partir do nível WARNING, ignorando os de INFO e DEBUG.
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logger = logging.getLogger(__name__)
-    
+
     logger.info("🚀 Iniciando sequência de startup da aplicação...")
     logger.info(f"Nível de log configurado para: {log_level_str}")
-
-    # 4. Inicializa os outros clientes que dependem dos parâmetros
+    
+    # 3. Inicializa outros clientes que possam depender dos parâmetros em cache.
     initialize_dynamic_clients()
     
     logger.info("✅ Aplicação iniciada e pronta para receber requisições!")
-    
-    yield # A aplicação fica rodando aqui
-    
-    # --- Código que roda no encerramento ---
+    yield
     logger.info("🔌 Encerrando a aplicação...")
 
-
-# Cria a aplicação FastAPI, registrando o lifespan
+# --- INICIALIZAÇÃO DA APLICAÇÃO ---
 app = FastAPI(
     title="AgenteIA API",
     description="API do assistente virtual Sisandinho...",
@@ -67,7 +49,6 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# Configurando CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -76,17 +57,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Registrando todos os routers
 app.include_router(api_router)
 
-
-# Endpoint de Health Check
-@app.get("/api/health")
-async def health_check():
-    return {"status": "healthy", "timestamp": datetime.now().isoformat()}
-
-
-# Endpoint raiz
-@app.get("/api")
+@app.get("/")
 def read_root():
     return {"message": "🚀 API do AgenteIA está funcionando perfeitamente"}

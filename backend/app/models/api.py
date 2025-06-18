@@ -113,3 +113,24 @@ class RespostaInfoSessao(BaseModel):
 class RequisicaoFeedback(BaseModel):
     id_mensagem: int = Field(..., description="O ID da mensagem que está sendo avaliada.")
     tipo_feedback: Literal["positivo", "negativo"] = Field(..., description="O tipo de feedback: 'positivo' ou 'negativo'.")
+    
+# ==============================================================================
+# Modelos para os Endpoints de Artigos (/artigos)
+# ==============================================================================
+
+class RequisicaoCriarArtigo(BaseModel):
+    """Corpo da requisição para criar um novo artigo."""
+    titulo: str = Field(..., description="Título do artigo")
+    conteudo: str = Field(..., description="Conteúdo completo do artigo")
+    categoria: str = Field("Geral", description="Categoria para organização")
+    url: Optional[str] = Field(None, description="URL de origem do artigo")
+    resumo: Optional[str] = Field(None, description="Resumo curto do artigo")
+    id_externo: Optional[str] = Field(None, description="ID de um sistema externo para referência")
+
+class RequisicaoAtualizarArtigo(BaseModel):
+    """Corpo da requisição para atualizar um artigo existente."""
+    titulo: Optional[str] = Field(None, description="Novo título do artigo")
+    conteudo: Optional[str] = Field(None, description="Novo conteúdo do artigo, irá gerar novo embedding")
+    categoria: Optional[str] = Field(None, description="Nova categoria do artigo")
+    url: Optional[str] = Field(None, description="Nova URL do artigo")
+    resumo: Optional[str] = Field(None, description="Novo resumo do artigo")

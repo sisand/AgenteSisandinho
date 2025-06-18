@@ -64,7 +64,7 @@ async def classificar_pergunta(pergunta: str) -> str:
 
         logger.info(f"✅ Classificação final: {melhor_categoria} (confiança: {melhor_pontuacao:.2f})")
 
-        LIMIAR_CONFIANCA = 0.30
+        LIMIAR_CONFIANCA = 0.01
         if melhor_pontuacao < LIMIAR_CONFIANCA:
             logger.warning(f"⚠️ Confiança baixa ({melhor_pontuacao:.2f}), a retornar 'geral'")
             return "geral"

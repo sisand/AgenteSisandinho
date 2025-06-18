@@ -13,7 +13,8 @@ from app.routers import (
     status,
     base_conhecimento,
     feedbacks,
-    metricas
+    metricas,
+    parametros
 )
 
 api_router = APIRouter()
@@ -32,3 +33,4 @@ api_router.include_router(importacao.router, prefix="/api/importacao", tags=["Im
 api_router.include_router(metricas.router, prefix="/api/metrics", tags=["Métricas"])
 api_router.include_router(status.router, prefix="/api/status", tags=["Status"])
 api_router.include_router(base_conhecimento.router, prefix="/api/base-conhecimento", tags=["Base de Conhecimento"])
+api_router.include_router(parametros.router, prefix="/api/parametros", tags=["Parâmetros"]) # <-- Linha adicionada

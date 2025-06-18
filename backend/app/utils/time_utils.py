@@ -1,32 +1,37 @@
-from datetime import datetime, timezone, timedelta
+# app/utils/time_utils.py
+"""
+Módulo com funções utilitárias para manipulação de data e hora,
+agora usando pytz para lidar com o horário de verão brasileiro.
+"""
+from datetime import datetime
+import pytz
+import logging
 
-def get_brazil_time():
-    """
-    Retorna o datetime atual no fuso horário do Brasil (UTC-3).
-    Usa o módulo datetime padrão sem depender do pytz.
-    """
-    # Criar datetime em UTC
-    utc_now = datetime.now(timezone.utc)
-    
-    # Converter para fuso horário do Brasil (UTC-3)
-    brazil_offset = timedelta(hours=-3)
-    brazil_time = utc_now.replace(tzinfo=timezone.utc).astimezone(timezone(brazil_offset))
-    
-    return brazil_time
+logger = logging.getLogger(__name__)
 
-def parse_isoformat_safe(s: str) -> datetime:
+# Define o fuso horário de Brasília como uma constante para ser reutilizada
+BRT_TIMEZONE = pytz.timezone('America/Sao_Paulo')
+
+def formatar_timestamp_para_brt(timestamp_utc_str: str) -> str:
     """
-    Converte string ISO para datetime, tratando microssegundos incompletos e sufixo Z.
+    Converte uma string de timestamp em formato ISO (UTC) para uma string
+    formatada no horário de Brasília (DD/MM/YYYY HH:MM:SS), lidando
+    corretamente com o horário de verão.
     """
+    if not timestamp_utc_str:
+        return "N/A"
+    
     try:
-        return datetime.fromisoformat(s)
-    except ValueError:
-        if 'T' in s and '.' in s:
-            base, rest = s.split('T')
-            time_part, micro_part = rest.split('.')
-            micro_part = (micro_part + '000000')[:6]  # Preenche até 6 dígitos
-            fixed = f"{base}T{time_part}.{micro_part}"
-            return datetime.fromisoformat(fixed)
-        if s.endswith('Z'):
-            return datetime.fromisoformat(s.replace('Z', '+00:00'))
-        raise
+        # Converte a string para um objeto datetime.
+        # A informação de fuso horário UTC já está na string do Supabase.
+        dt_utc = datetime.fromisoformat(timestamp_utc_str)
+        
+        # Converte para o fuso horário de Brasília
+        dt_brt = dt_utc.astimezone(BRT_TIMEZONE)
+        
+        # Formata para o padrão brasileiro
+        return dt_brt.strftime('%d/%m/%Y %H:%M:%S')
+    except (ValueError, TypeError) as e:
+        logger.warning(f"Não foi possível formatar o timestamp '{timestamp_utc_str}': {e}")
+        return "Data Inválida"
+

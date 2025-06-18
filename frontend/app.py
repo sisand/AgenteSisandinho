@@ -18,8 +18,8 @@ from services.api_client import (
     importar_artigos,
     atualizar_prompt,
     carregar_prompts,
+    carregar_parametros_para_cache,
     # Removido para evitar confusão, já que não estamos usando todas as funções
-    # carregar_parametros,
     # carregar_historico,
     # buscar_tickets,
     # salvar_curadoria,
@@ -103,38 +103,36 @@ with st.sidebar:
 
 if pagina.startswith("🔍"):
     st.subheader("💬 Chat Inteligente com IA")
-    st.markdown("Converse com o Sisandinho, seu especialista no ERP Vision.")
-
     if 'id_sessao' in st.session_state:
         st.caption(f"Sessão: {st.session_state.get('id_sessao')} | Início: {st.session_state.get('data_inicio_sessao')} às {st.session_state.get('hora_inicio_sessao')}")
-
     if "messages" not in st.session_state:
         st.session_state.messages = []
-
-    # --- INÍCIO DA CORREÇÃO: Removido o loop duplicado ---
+    
+    # Loop para exibir o histórico de mensagens
     for i, message in enumerate(st.session_state.messages):
         with st.chat_message(message["role"]):
             content = message["content"]
             resposta_texto = content.get("resposta", content) if isinstance(content, dict) else content
             st.markdown(resposta_texto)
-
+            
+            # Lógica para exibir fontes e botões de feedback para mensagens do assistente
             if message["role"] == "assistant" and isinstance(content, dict):
                 id_mensagem = content.get("id_mensagem")
+                
+                # --- CORREÇÃO AQUI: Adicionado 'expanded=True' ---
+                if content.get("artigos"):
+                    with st.expander("📚 Fontes Consultadas", expanded=True):
+                        for artigo in content["artigos"]:
+                            st.markdown(f"📄 [{artigo.get('title', 'Link sem título')}]({artigo.get('url')})")
+                
                 if id_mensagem:
                     col1, col2, _ = st.columns([1, 1, 8])
                     with col1:
                         if st.button("👍", key=f"like_{id_mensagem}"):
-                            enviar_feedback(id_mensagem, "positivo")
-                            st.toast("Obrigado pelo seu feedback!")
+                            enviar_feedback(id_mensagem, "positivo"); st.toast("Obrigado pelo seu feedback!")
                     with col2:
                         if st.button("👎", key=f"dislike_{id_mensagem}"):
-                            enviar_feedback(id_mensagem, "negativo")
-                            st.toast("Obrigado! Vamos usar seu feedback para melhorar.")
-                            
-                if content.get("artigos"):
-                    with st.expander("📚 Fontes Consultadas"):
-                        for artigo in content["artigos"]:
-                            st.markdown(f"📄 [{artigo['title']}]({artigo['url']})")
+                            enviar_feedback(id_mensagem, "negativo"); st.toast("Obrigado! Vamos usar seu feedback para melhorar.")
     # --- FIM DA CORREÇÃO ---
 
     if prompt := st.chat_input("Digite sua pergunta sobre o Vision..."):
@@ -369,6 +367,26 @@ elif pagina.startswith("📊"):
             col3.metric("Mensagens no Período", metricas.get("total_mensagens_periodo", 0))
 
             st.markdown("---")
+
+            # --- GRÁFICO DE EVOLUÇÃO ---
+            st.markdown("### Evolução do Desempenho")
+            historico = metricas.get("historico_desempenho", [])
+            if historico:
+                df_historico = pd.DataFrame(historico).set_index('Data')
+                st.line_chart(df_historico)
+            else:
+                st.info("Não há dados suficientes no período para exibir a evolução do desempenho.")
+            
+            st.markdown("---")
+            # --- NOVA TABELA: ÚLTIMAS INTERAÇÕES ---
+            st.markdown("### Análise em Tempo Real (Últimas 10 Interações)")
+            ultimas_interacoes = metricas.get("ultimas_interacoes", [])
+            if ultimas_interacoes:
+                df_interacoes = pd.DataFrame(ultimas_interacoes)
+                st.dataframe(df_interacoes, use_container_width=True, hide_index=True)
+            else:
+                st.info("Nenhuma interação recente para exibir.")
+                
             st.markdown("### Desempenho e Custos")
             col1, col2 = st.columns(2)
             with col1:
@@ -421,7 +439,7 @@ elif pagina.startswith("⚙️"):
     st.subheader("⚙️ Configurações do Sistema")
     st.markdown("Visualize os parâmetros carregados do banco de dados.")
 
-    parametros = carregar_parametros()
+    parametros = carregar_parametros_para_cache()
     if parametros and isinstance(parametros, list):
         params_dict = {p['nome']: p['valor'] for p in parametros}
         st.json(params_dict)

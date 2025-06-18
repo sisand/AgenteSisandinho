@@ -174,6 +174,8 @@ multiprocess==0.70.16
     # via datasets
 mypy-extensions==1.1.0
     # via typing-inspect
+narwhals==1.43.0
+    # via plotly
 networkx==3.4.2
     # via torch
 numexpr==2.10.2
@@ -201,12 +203,15 @@ packaging==23.2
     #   huggingface-hub
     #   langchain-core
     #   marshmallow
+    #   plotly
     #   pytest
     #   transformers
 pandas==2.2.1
     # via
     #   -r requirements.in
     #   datasets
+plotly==6.1.2
+    # via -r requirements.in
 pluggy==1.6.0
     # via pytest
 postgrest==1.0.2
@@ -265,7 +270,9 @@ python-dotenv==1.0.1
     #   -r requirements.in
     #   pydantic-settings
 pytz==2025.2
-    # via pandas
+    # via
+    #   -r requirements.in
+    #   pandas
 pyyaml==6.0.2
     # via
     #   accelerate

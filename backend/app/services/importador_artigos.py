@@ -8,7 +8,7 @@ from datetime import datetime, timezone, timedelta
 import re
 from app.core.clients import get_weaviate_client, get_openai_client
 from app.core.config import get_settings
-from app.core.dynamic_config import obter_parametro
+from app.core.cache import obter_parametro
 from weaviate.classes.config import Property, DataType
 from weaviate.collections.classes.filters import Filter
 from weaviate.collections.classes.data import DataObject

@@ -8,7 +8,7 @@ from datetime import datetime
 
 from app.utils.logger import get_logger
 from app.core.clients import get_supabase_client
-from app.utils.time_utils import get_brazil_time
+
 
 logger = get_logger(__name__)
 

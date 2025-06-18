@@ -1,17 +1,21 @@
+# app/services/artigos.py
 """
 Gestão de artigos da base de conhecimento.
-Responsável por operações CRUD nos artigos utilizados pelo RAG.
+Responsável por operações CRUD (Criar, Ler, Atualizar, Excluir) 
+nos artigos utilizados pelo RAG.
 """
 
+import logging
 from typing import List, Dict, Any, Optional
-from datetime import datetime
-import uuid
 
-from app.utils.logger import get_logger
+# Importa as funções de cliente necessárias
+from datetime import datetime, timezone # <-- CORREÇÃO: Importa datetime e timezone
+# Importa as funções de cliente necessárias
 from app.core.clients import get_weaviate_client, gerar_embedding_openai
-from app.utils.time_utils import get_brazil_time
+# A importação de time_utils foi removida, pois não é mais necessária aqui.
 
-logger = get_logger(__name__)
+
+logger = logging.getLogger(__name__)
 
 async def buscar_artigos(
     query: Optional[str] = None,
@@ -19,60 +23,37 @@ async def buscar_artigos(
     limite: int = 50
 ) -> List[Dict[str, Any]]:
     """
-    Busca artigos na base de conhecimento.
-    
-    Args:
-        query: Texto para busca (opcional)
-        categoria: Filtrar por categoria (opcional)
-        limite: Número máximo de resultados
-        
-    Returns:
-        Lista de artigos encontrados
+    Busca artigos na base de conhecimento do Weaviate.
+    - Se uma 'query' é fornecida, faz uma busca semântica (near_text).
+    - Se não, faz uma busca geral com filtros (fetch_objects).
     """
     try:
         client = get_weaviate_client()
-        
-        if not client:
-            raise Exception("Cliente Weaviate não disponível")
-            
         collection = client.collections.get("Article")
         
-        # Definir filtros
+        # Define filtros para a busca, se uma categoria for fornecida
         filters = None
         if categoria:
-            filters = {
-                "path": ["category"],
-                "operator": "Equal",
-                "valueString": categoria
-            }
+            from weaviate.classes.query import Filter # Importação local para clareza
+            filters = Filter.by_property("category").equal(categoria)
             
-        # Executar consulta
+        # Executa a consulta com a lógica correta
         if query:
-            # Busca semântica
+            # Busca semântica (vetorial) se uma query for fornecida
             results = collection.query.near_text(
                 query=query,
                 limit=limite,
                 filters=filters
             )
         else:
-            # Busca por filtros ou todos os artigos
+            # Busca geral com filtros ou simplesmente lista todos os artigos
             results = collection.query.fetch_objects(
                 limit=limite,
                 filters=filters
             )
             
-        # Processar resultados
-        artigos = []
-        for obj in results.objects:
-            artigos.append({
-                "id": obj.uuid,
-                "titulo": obj.properties.get("title", "Sem título"),
-                "categoria": obj.properties.get("category", "Geral"),
-                "resumo": obj.properties.get("summary", ""),
-                "conteudo": obj.properties.get("content", ""),
-                "url": obj.properties.get("url", ""),
-                "data_criacao": obj.properties.get("creation_date", "")
-            })
+        # Processa os resultados para um formato limpo
+        artigos = [obj.properties for obj in results.objects]
             
         logger.info(f"Encontrados {len(artigos)} artigos")
         return artigos
@@ -86,60 +67,36 @@ async def criar_artigo(
     conteudo: str,
     categoria: str = "Geral",
     url: str = "",
-    resumo: str = "",
-    id_externo: str = ""
+    resumo: str = ""
 ) -> Dict[str, Any]:
     """
-    Cria um novo artigo na base de conhecimento.
-    
-    Args:
-        titulo: Título do artigo
-        conteudo: Conteúdo do artigo
-        categoria: Categoria do artigo
-        url: URL de origem (opcional)
-        resumo: Resumo do artigo (opcional)
-        id_externo: ID externo para rastreamento (opcional)
-        
-    Returns:
-        Artigo criado ou detalhes do erro
+    Cria um novo artigo de forma assíncrona.
     """
     try:
         client = get_weaviate_client()
-        
-        if not client:
-            raise Exception("Cliente Weaviate não disponível")
-            
         collection = client.collections.get("Article")
         
-        # Gerar embedding do conteúdo
         embedding = await gerar_embedding_openai(conteudo)
-        
         if not embedding:
             raise Exception("Falha ao gerar embedding para o artigo")
             
-        # Montar dados do artigo
         artigo_data = {
             "title": titulo,
             "content": conteudo,
             "category": categoria,
-            "url": url or "",
-            "summary": resumo or "",
-            "external_id": id_externo or "",
-            "creation_date": get_brazil_time().isoformat(),
-            "vector": embedding
+            "url": url,
+            "summary": resumo,
+            # --- CORREÇÃO: Usa o padrão de data UTC ---
+            "creation_date": datetime.now(timezone.utc).isoformat(),
         }
         
-        # Inserir no Weaviate
-        result = collection.data.insert(artigo_data)
+        uuid_gerado = collection.data.insert(
+            properties=artigo_data,
+            vector=embedding
+        )
         
-        logger.info(f"Artigo '{titulo}' criado com sucesso (ID: {result})")
-        
-        return {
-            "id": result,
-            "titulo": titulo,
-            "categoria": categoria,
-            "status": "success"
-        }
+        logger.info(f"Artigo '{titulo}' criado com sucesso (UUID: {uuid_gerado})")
+        return {"id": str(uuid_gerado), "titulo": titulo, "status": "success"}
         
     except Exception as e:
         logger.error(f"Erro ao criar artigo: {str(e)}")
@@ -154,56 +111,29 @@ async def atualizar_artigo(
     resumo: Optional[str] = None
 ) -> Dict[str, Any]:
     """
-    Atualiza um artigo existente.
-    
-    Args:
-        artigo_id: ID do artigo
-        titulo: Novo título (opcional)
-        conteudo: Novo conteúdo (opcional)
-        categoria: Nova categoria (opcional)
-        url: Nova URL (opcional)
-        resumo: Novo resumo (opcional)
-        
-    Returns:
-        Status da operação
+    Atualiza um artigo existente. Se o conteúdo for alterado, o vetor é recalculado.
     """
     try:
         client = get_weaviate_client()
-        
-        if not client:
-            raise Exception("Cliente Weaviate não disponível")
-            
         collection = client.collections.get("Article")
         
-        # Montar dados para atualização
         update_data = {}
+        if titulo is not None: update_data["title"] = titulo
+        if categoria is not None: update_data["category"] = categoria
+        if url is not None: update_data["url"] = url
+        if resumo is not None: update_data["summary"] = resumo
         
-        if titulo:
-            update_data["title"] = titulo
-            
-        if categoria:
-            update_data["category"] = categoria
-            
-        if url:
-            update_data["url"] = url
-            
-        if resumo:
-            update_data["summary"] = resumo
-            
-        if conteudo:
+        vetor_para_atualizar = None
+        if conteudo is not None:
             update_data["content"] = conteudo
-            # Atualizar embedding se o conteúdo mudou
-            embedding = await gerar_embedding_openai(conteudo)
-            if embedding:
-                update_data["vector"] = embedding
+            vetor_para_atualizar = await gerar_embedding_openai(conteudo)
         
-        # Aplicar atualização
         if update_data:
             collection.data.update(
                 uuid=artigo_id,
-                properties=update_data
+                properties=update_data,
+                vector=vetor_para_atualizar
             )
-            
             logger.info(f"Artigo {artigo_id} atualizado com sucesso")
             return {"status": "success", "id": artigo_id}
         else:
@@ -216,22 +146,11 @@ async def atualizar_artigo(
 async def excluir_artigo(artigo_id: str) -> Dict[str, Any]:
     """
     Exclui um artigo da base de conhecimento.
-    
-    Args:
-        artigo_id: ID do artigo
-        
-    Returns:
-        Status da operação
     """
     try:
         client = get_weaviate_client()
-        
-        if not client:
-            raise Exception("Cliente Weaviate não disponível")
-            
         collection = client.collections.get("Article")
         
-        # Excluir do Weaviate
         collection.data.delete(uuid=artigo_id)
         
         logger.info(f"Artigo {artigo_id} excluído com sucesso")
