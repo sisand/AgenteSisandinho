@@ -19,6 +19,7 @@ from services.api_client import (
     atualizar_prompt,
     carregar_prompts,
     carregar_parametros,
+    atualizar_parametro
     # Removido para evitar confusão, já que não estamos usando todas as funções
     # carregar_historico,
     # buscar_tickets,
@@ -437,18 +438,42 @@ elif pagina.startswith("📊"):
 # ⚙️ PÁGINA: CONFIGURAÇÕES
 elif pagina.startswith("⚙️"):
     st.subheader("⚙️ Configurações do Sistema")
-    st.markdown("Visualize os parâmetros carregados do banco de dados.")
+    st.markdown("Altere os parâmetros que controlam o comportamento do Sisandinho.")
 
     parametros = carregar_parametros()
-    if parametros and isinstance(parametros, list):
-        params_dict = {p['nome']: p['valor'] for p in parametros}
-        st.json(params_dict)
+    
+    if "error" in parametros:
+        st.error(f"Erro ao carregar parâmetros: {parametros['error']}")
+    elif parametros:
+        st.info("Altere o valor de um parâmetro e clique em 'Salvar' para aplicá-lo em tempo real.")
+        
+        for nome, valor in parametros.items():
+            st.markdown("---")
+            col1, col2, col3 = st.columns([2, 3, 1])
+            
+            with col1:
+                st.markdown(f"**{nome}**")
+            
+            with col2:
+                novo_valor = st.text_input(
+                    label="Valor", 
+                    value=str(valor), 
+                    key=f"param_{nome}",
+                    label_visibility="collapsed"
+                )
+            
+            with col3:
+                if st.button("Salvar", key=f"btn_param_{nome}", use_container_width=True):
+                    with st.spinner("Salvando..."):
+                        resultado = atualizar_parametro(nome, novo_valor)
+                        if "error" in resultado:
+                            st.error(f"Falha: {resultado['error']}")
+                        else:
+                            st.success("Salvo!")
+                            # Força um recarregamento para mostrar o novo valor, se necessário
+                            # st.rerun() # Descomente se a atualização não for refletida imediatamente
     else:
         st.warning("Nenhum parâmetro encontrado.")
-    
-    if st.button("🔄 Recarregar Parâmetros do Banco"):
-        st.info("Funcionalidade de recarga a ser implementada.")
-
 
 # 🔚 RODAPÉ GLOBAL
 st.markdown("---")

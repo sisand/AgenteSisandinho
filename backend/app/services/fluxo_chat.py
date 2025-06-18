@@ -59,7 +59,7 @@ async def processar_pergunta(pergunta: str, id_usuario: int) -> RespostaChat:
         system_prompt=system_prompt,
         user_message=pergunta,
         model=obter_parametro("modelo", default="gpt-4o"),
-        temperature=float(obter_parametro("temperatura", default=0.7))
+        temperature=float(obter_parametro("temperatura", default=0.0))
     )
     resposta_final = dados_llm.get("content", "Desculpe, não consegui gerar uma resposta no momento.")
 

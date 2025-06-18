@@ -4,7 +4,7 @@ import streamlit as st
 import requests
 import logging
 from typing import Dict, List, Any, Optional
-from datetime import date # <-- CORREÇÃO: Importa o tipo 'date'
+from datetime import date
 
 
 logger = logging.getLogger(__name__)
@@ -16,7 +16,7 @@ def api_call(
     method: str = "GET",
     data: Optional[Dict] = None,
     params: Optional[Dict] = None,
-    timeout: int = 45
+    timeout: int = 60
 ) -> Dict:
     """
     Função centralizada para fazer chamadas à API do backend, incluindo autenticação.
@@ -94,10 +94,14 @@ def atualizar_prompt(id_prompt: int, nome: str, conteudo: str) -> Dict:
     payload = {"nome": nome, "conteudo": conteudo}
     return api_call(f"prompts/{id_prompt}", method="PUT", data=payload)
 
-def carregar_parametros() -> List[Dict]:
-    """Carrega os parâmetros do sistema a partir do backend."""
-    response = api_call("parametros/")
-    return response if isinstance(response, list) else []
+def carregar_parametros() -> Dict:
+    """Busca os parâmetros do sistema a partir do backend."""
+    return api_call("parametros/")
+
+def atualizar_parametro(nome: str, valor: Any) -> Dict:
+    """Envia uma requisição para atualizar o valor de um parâmetro."""
+    payload = {"valor": valor}
+    return api_call(f"parametros/{nome}", method="PUT", data=payload)
 
 def carregar_historico() -> List[Dict]:
     """Busca o histórico de conversas."""
