@@ -1,4 +1,8 @@
 # app/main.py
+"""
+Ponto de entrada principal da aplicação FastAPI.
+Gerencia o ciclo de vida e a inclusão de todas as rotas da API.
+"""
 import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
@@ -7,11 +11,11 @@ from fastapi.middleware.cors import CORSMiddleware
 # Importa o router principal que agrega todas as outras rotas
 from app.routers import api_router
 
-# --- ALTERAÇÃO AQUI ---
-# Importa apenas do clients e do novo cache
+# --- CORREÇÃO: Importa apenas do clients e do novo cache ---
 from app.core.clients import get_supabase_client, initialize_dynamic_clients
 from app.core.cache import carregar_parametros_para_cache, carregar_prompts_para_cache, obter_parametro
 
+# --- GERENCIADOR DE CICLO DE VIDA (LIFESPAN) ---
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Gerencia o ciclo de vida da aplicação (startup e shutdown)."""
@@ -28,6 +32,7 @@ async def lifespan(app: FastAPI):
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
         force=True
     )
+    # Reduz o "ruído" de logs de bibliotecas HTTP.
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logger = logging.getLogger(__name__)
 
@@ -43,12 +48,13 @@ async def lifespan(app: FastAPI):
 
 # --- INICIALIZAÇÃO DA APLICAÇÃO ---
 app = FastAPI(
-    title="AgenteIA API",
-    description="API do assistente virtual Sisandinho...",
+    title="Sisandinho - Assistente IA API",
+    description="API do assistente virtual Sisandinho, com RAG e IA generativa.",
     version="1.0.0",
-    lifespan=lifespan
+    lifespan=lifespan # Associa o gerenciador de ciclo de vida à aplicação
 )
 
+# Configura o CORS para permitir requisições de qualquer origem
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -57,8 +63,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Inclui todas as rotas definidas no seu arquivo routers/__init__.py
 app.include_router(api_router)
 
+# Endpoint raiz para verificação de status (health check)
 @app.get("/")
 def read_root():
     return {"message": "🚀 API do AgenteIA está funcionando perfeitamente"}

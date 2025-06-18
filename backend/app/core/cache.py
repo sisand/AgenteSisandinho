@@ -56,3 +56,7 @@ def obter_parametro(nome: str, default: Any = None) -> Any:
 def obter_prompt(nome: str) -> Any:
     """Busca um prompt do cache em memória."""
     return PROMPTS_CACHE.get(nome)
+
+def obter_todos_parametros() -> Dict[str, Any]:
+    """Retorna uma cópia de todos os parâmetros que estão em cache."""
+    return PARAMETROS_CACHE.copy()

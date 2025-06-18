@@ -94,7 +94,7 @@ def atualizar_prompt(id_prompt: int, nome: str, conteudo: str) -> Dict:
     payload = {"nome": nome, "conteudo": conteudo}
     return api_call(f"prompts/{id_prompt}", method="PUT", data=payload)
 
-def carregar_parametros_para_cache() -> List[Dict]:
+def carregar_parametros() -> List[Dict]:
     """Carrega os parâmetros do sistema a partir do backend."""
     response = api_call("parametros/")
     return response if isinstance(response, list) else []

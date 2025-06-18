@@ -18,7 +18,7 @@ from services.api_client import (
     importar_artigos,
     atualizar_prompt,
     carregar_prompts,
-    carregar_parametros_para_cache,
+    carregar_parametros,
     # Removido para evitar confusão, já que não estamos usando todas as funções
     # carregar_historico,
     # buscar_tickets,
@@ -439,7 +439,7 @@ elif pagina.startswith("⚙️"):
     st.subheader("⚙️ Configurações do Sistema")
     st.markdown("Visualize os parâmetros carregados do banco de dados.")
 
-    parametros = carregar_parametros_para_cache()
+    parametros = carregar_parametros()
     if parametros and isinstance(parametros, list):
         params_dict = {p['nome']: p['valor'] for p in parametros}
         st.json(params_dict)
